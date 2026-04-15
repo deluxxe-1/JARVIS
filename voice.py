@@ -24,6 +24,12 @@ LISTEN_TIMEOUT = int(os.environ.get("JARVIS_LISTEN_TIMEOUT", "5"))
 PHRASE_TIME_LIMIT = int(os.environ.get("JARVIS_PHRASE_TIME_LIMIT", "15"))
 ENERGY_THRESHOLD = int(os.environ.get("JARVIS_ENERGY_THRESHOLD", "300"))
 
+# STT Engine: "google" (default, requiere internet) o "whisper" (offline, requiere faster-whisper)
+STT_ENGINE = os.environ.get("JARVIS_STT_ENGINE", "google").strip().lower()
+WHISPER_MODEL = os.environ.get("JARVIS_WHISPER_MODEL", "base")  # tiny, base, small, medium, large
+WHISPER_DEVICE = os.environ.get("JARVIS_WHISPER_DEVICE", "cpu")  # cpu o cuda
+
+
 
 # ---------------------------------------------------------------------------
 # Voice Speaker — TTS con pyttsx3
@@ -256,6 +262,149 @@ class VoiceListener:
             return sr.Microphone.list_microphone_names()
         except Exception:
             return []
+
+
+# ---------------------------------------------------------------------------
+# WhisperListener — STT offline con faster-whisper
+# ---------------------------------------------------------------------------
+
+class WhisperListener:
+    """
+    Reconocimiento de voz offline usando faster-whisper.
+    Requiere: pip install faster-whisper
+    El modelo se descarga automáticamente la primera vez.
+    """
+
+    def __init__(
+        self,
+        model_size: str = WHISPER_MODEL,
+        device: str = WHISPER_DEVICE,
+        language: str = VOICE_LANG,
+        listen_timeout: int = LISTEN_TIMEOUT,
+        phrase_time_limit: int = PHRASE_TIME_LIMIT,
+    ):
+        self._model_size = model_size
+        self._device = device
+        self._language = language[:2]  # "es-ES" -> "es"
+        self._listen_timeout = listen_timeout
+        self._phrase_time_limit = phrase_time_limit
+        self._model = None
+        self._recognizer = None
+        self._microphone = None
+
+    def _init_model(self):
+        """Carga el modelo Whisper (lazy loading)."""
+        if self._model is not None:
+            return
+        try:
+            from faster_whisper import WhisperModel
+            self._model = WhisperModel(
+                self._model_size,
+                device=self._device,
+                compute_type="int8" if self._device == "cpu" else "float16",
+            )
+        except ImportError:
+            raise RuntimeError(
+                "faster-whisper no está instalado. Ejecuta: pip install faster-whisper"
+            )
+
+    def _init_audio(self):
+        """Inicializa el micrófono para captura de audio."""
+        if self._recognizer is not None:
+            return
+        try:
+            import speech_recognition as sr
+            self._recognizer = sr.Recognizer()
+            self._recognizer.energy_threshold = ENERGY_THRESHOLD
+            self._recognizer.dynamic_energy_threshold = True
+            self._microphone = sr.Microphone()
+            with self._microphone as source:
+                self._recognizer.adjust_for_ambient_noise(source, duration=1)
+        except Exception as e:
+            raise RuntimeError(f"No se pudo inicializar el micrófono: {e}")
+
+    def _transcribe_audio(self, audio_data) -> Optional[str]:
+        """Transcribe audio con Whisper."""
+        import tempfile
+
+        self._init_model()
+
+        # Convertir audio a WAV temporal
+        wav_data = audio_data.get_wav_data()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(wav_data)
+            tmp_path = tmp.name
+
+        try:
+            segments, _info = self._model.transcribe(
+                tmp_path,
+                language=self._language,
+                beam_size=5,
+                vad_filter=True,
+            )
+            text_parts = [segment.text for segment in segments]
+            text = " ".join(text_parts).strip()
+            return text if text else None
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+    def listen_once(self) -> Optional[str]:
+        """Escucha una frase y la transcribe con Whisper (offline)."""
+        try:
+            import speech_recognition as sr
+            self._init_audio()
+            with self._microphone as source:
+                audio = self._recognizer.listen(
+                    source,
+                    timeout=self._listen_timeout,
+                    phrase_time_limit=self._phrase_time_limit,
+                )
+            return self._transcribe_audio(audio)
+        except Exception:
+            return None
+
+    def listen_for_wake_word(self, wake_word: str = WAKE_WORD) -> Optional[str]:
+        """Escucha hasta detectar la wake word, luego devuelve el comando."""
+        text = self.listen_once()
+        if text is None:
+            return None
+        text_lower = text.lower().strip()
+        if wake_word not in text_lower:
+            return None
+        idx = text_lower.find(wake_word)
+        command = text[idx + len(wake_word):].strip().lstrip(",. ")
+        if command:
+            return command
+        return self.listen_once()
+
+    def is_available(self) -> bool:
+        """Comprueba si el micrófono está disponible."""
+        try:
+            import speech_recognition as sr
+            return len(sr.Microphone.list_microphone_names()) > 0
+        except Exception:
+            return False
+
+    def list_microphones(self) -> list[str]:
+        """Lista los micrófonos disponibles."""
+        try:
+            import speech_recognition as sr
+            return sr.Microphone.list_microphone_names()
+        except Exception:
+            return []
+
+
+def create_listener():
+    """
+    Factory: crea el listener STT adecuado según la configuración.
+    Usa JARVIS_STT_ENGINE para seleccionar: "google" (default) o "whisper" (offline).
+    """
+    if STT_ENGINE == "whisper":
+        return WhisperListener()
+    return VoiceListener()
 
 
 # ---------------------------------------------------------------------------

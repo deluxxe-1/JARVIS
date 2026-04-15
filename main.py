@@ -112,6 +112,38 @@ from automation import (
     empty_recycle_bin,
 )
 
+from productivity import (
+    set_reminder,
+    set_timer,
+    list_reminders,
+    cancel_reminder,
+    create_macro,
+    run_macro,
+    list_macros,
+    delete_macro,
+    generate_password,
+    save_password,
+    get_password,
+    list_passwords,
+    delete_password,
+)
+
+from intelligence import (
+    screen_ocr,
+    image_ocr,
+    extract_document_text,
+    summarize_document,
+    semantic_search,
+    index_directory,
+)
+
+from agents import (
+    spawn_agent,
+    list_running_agents,
+    kill_agent,
+    read_agent_result,
+)
+
 console = Console()
 
 MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
@@ -181,7 +213,10 @@ def _build_tool_groups(available_tools: list) -> dict[str, list]:
         "data":   _pick("db_query_sqlite"),
         "admin":  _pick(
             "rollback", "rollback_tokens", "policy_show", "policy_set",
-            "policy_reset", "resolve_path", "delegate_task", "schedule_agent_task",
+            "policy_reset", "resolve_path", "schedule_agent_task",
+        ),
+        "agents": _pick(
+            "spawn_agent", "list_running_agents", "kill_agent", "read_agent_result",
         ),
         "apis": _pick(
             "get_weather", "get_news", "web_search", "wikipedia_search",
@@ -193,6 +228,16 @@ def _build_tool_groups(available_tools: list) -> dict[str, list]:
             "set_clipboard", "show_notification", "open_url", "lock_screen",
             "system_info", "get_battery", "set_brightness", "get_brightness",
             "empty_recycle_bin",
+        ),
+        "productivity": _pick(
+            "set_reminder", "set_timer", "list_reminders", "cancel_reminder",
+            "create_macro", "run_macro", "list_macros", "delete_macro",
+            "generate_password", "save_password", "get_password",
+            "list_passwords", "delete_password",
+        ),
+        "intelligence": _pick(
+            "screen_ocr", "image_ocr", "extract_document_text",
+            "summarize_document", "semantic_search", "index_directory",
         ),
     }
 
@@ -250,9 +295,16 @@ def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str,
     # Admin / rollback / política
     if any(k in s for k in [
         "rollback", "deshacer", "política", "politica", "policy",
-        "delega", "agenda", "programa", "tarea programada",
+        "agenda", "programa", "tarea programada",
     ]):
         _add_group("admin")
+        
+    # Agentes (background)
+    if any(k in s for k in [
+        "agente", "agent", "background", "segundo plano", "delega", "investiga al fondo",
+        "mata el agente", "agentes activos",
+    ]):
+        _add_group("agents")
 
     # APIs externas
     if any(k in s for k in [
@@ -286,6 +338,27 @@ def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str,
         "papelera", "recycle", "vaciar",
     ]):
         _add_group("automation")
+
+    # Productividad
+    if any(k in s for k in [
+        "recordatorio", "reminder", "recuérdame", "recuerdame", "avísame", "avisame",
+        "timer", "temporizador", "cronómetro", "cronometro", "alarma",
+        "macro", "workflow", "modo trabajo", "modo gaming", "modo estudio",
+        "contraseña", "contrasena", "password", "clave", "vault",
+        "genera contraseña", "genera password", "credenciales",
+    ]):
+        _add_group("productivity")
+
+    # Inteligencia avanzada
+    if any(k in s for k in [
+        "ocr", "leer pantalla", "texto en pantalla", "extraer texto",
+        "leer imagen", "texto de imagen",
+        "resume", "resumir", "resumen", "summarize", "summary",
+        "pdf", "docx", "documento",
+        "búsqueda semántica", "busqueda semantica", "semantic search",
+        "indexar", "indexa", "embeddings",
+    ]):
+        _add_group("intelligence")
 
     only_files = len(added_names) <= len(tool_groups.get("files", []))
     if only_files and len(s.split()) > 6:
@@ -471,6 +544,21 @@ SYSTEM_PROMPT = """Eres JARVIS, un asistente personal inteligente para Windows. 
 - `get_battery`: estado de la batería.
 - `set_brightness` / `get_brightness`: control de brillo.
 - `empty_recycle_bin`: vaciar papelera (requiere confirm=true).
+
+## Productividad
+- `set_reminder` / `set_timer`: recordatorios y temporizadores con notificación toast.
+- `list_reminders` / `cancel_reminder`: gestión de recordatorios activos.
+- `create_macro` / `run_macro` / `list_macros` / `delete_macro`: macros de acciones (ej: "modo trabajo" abre Chrome+VSCode+Teams).
+- `generate_password`: genera contraseñas seguras.
+- `save_password` / `get_password` / `list_passwords` / `delete_password`: vault de contraseñas encriptado (Fernet/AES).
+
+## Inteligencia Avanzada
+- `screen_ocr`: captura la pantalla y extrae texto con OCR.
+- `image_ocr`: extrae texto de una imagen.
+- `summarize_document`: resume un PDF, DOCX o TXT usando el LLM local.
+- `extract_document_text`: extrae texto crudo de documentos.
+- `semantic_search`: búsqueda semántica en archivos usando embeddings de Ollama.
+- `index_directory`: indexa un directorio para búsqueda semántica.
 
 ## Contexto
 Estás en una sesión interactiva en un sistema Windows. El directorio de trabajo del proceso es el cwd del usuario al lanzar el programa. Usa rutas absolutas cuando el usuario las dé, o relativas al cwd actual."""
@@ -1082,7 +1170,8 @@ def main():
         run_command_retry, policy_show, policy_set, policy_reset,
         rollback, rollback_tokens, ast_list_functions, ast_read_function,
         docker_ps, docker_logs, docker_exec, db_query_sqlite,
-        delegate_task, schedule_agent_task,
+        schedule_agent_task, spawn_agent, list_running_agents, 
+        kill_agent, read_agent_result,
         # APIs
         get_weather, get_news, web_search, wikipedia_search,
         translate_text, get_ip_info, get_crypto_price, get_datetime_info,
@@ -1092,6 +1181,14 @@ def main():
         set_clipboard, show_notification, open_url, lock_screen,
         system_info, get_battery, set_brightness, get_brightness,
         empty_recycle_bin,
+        # Productivity
+        set_reminder, set_timer, list_reminders, cancel_reminder,
+        create_macro, run_macro, list_macros, delete_macro,
+        generate_password, save_password, get_password,
+        list_passwords, delete_password,
+        # Intelligence
+        screen_ocr, image_ocr, extract_document_text,
+        summarize_document, semantic_search, index_directory,
     ]
 
     tool_map = {f.__name__: f for f in available_tools}
@@ -1154,6 +1251,39 @@ def main():
             httpd.serve_forever()
         except KeyboardInterrupt:
             pass
+        return
+
+    if "--run-agent" in sys.argv:
+        idx = sys.argv.index("--run-agent")
+        if idx + 2 < len(sys.argv):
+            name = sys.argv[idx + 1]
+            task = sys.argv[idx + 2]
+            
+            global DRY_RUN
+            DRY_RUN = False  # El agente es totalmente funcional
+            
+            # El sistema cree que es el agente
+            prompt = f"Eres un agente en background de JARVIS. Tu nombre y tu id es '{name}'. Tu tarea principal es: {task}\nCuando termines o logres el objetivo tu salida será tu resultado final y podrás cerrarte."
+            msgs = prefix_messages[:] + [{"role": "user", "content": prompt}]
+            
+            # Activar herramientas relevantes para agentes (excluyendo peligrosas como admin/configuraciones per sé si no se desea)
+            # Por simplicidad, tomamos todas pero limitadas (el sistema de policy lo controla).
+            active = available_tools
+            
+            try:
+                reply = _run_tool_loop(msgs, active, tool_map, opts)
+                from automation import show_notification
+                show_notification("JARVIS", f"Agente '{name}' terminó su tarea.")
+            except Exception as e:
+                reply = f"Error catastrófico en el agente {name}:\n{e}"
+            
+            # Guardar el resultado en agents dir
+            try:
+                from agents import AGENTS_LOGS_DIR
+                AGENTS_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+                (AGENTS_LOGS_DIR / f"{name}_result.md").write_text(reply, encoding="utf-8")
+            except Exception:
+                pass
         return
 
     if "--run-prompt" in sys.argv:
