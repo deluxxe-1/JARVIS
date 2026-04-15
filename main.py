@@ -1,0 +1,1608 @@
+"""
+JARVIS — Asistente personal con voz para Windows.
+
+Basado en AARIS (Linux), adaptado para Windows con:
+- Reconocimiento de voz (STT) via speech_recognition
+- Síntesis de voz (TTS) via pyttsx3 (SAPI5)
+- Herramientas adaptadas a Windows (PowerShell, servicios, etc.)
+- Modelo LLM local via Ollama
+
+Uso:
+  python main.py                    # Modo interactivo (texto + voz)
+  python main.py --text-only        # Solo texto (sin micrófono)
+  python main.py --server           # Modo servidor HTTP
+  python main.py --run-prompt "..."  # Ejecutar un prompt y salir
+"""
+
+import json
+import os
+import re
+import time
+import difflib
+from typing import Any
+from datetime import datetime
+from pathlib import Path
+
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.prompt import Prompt
+from ollama import chat
+
+from tools import (
+    append_file,
+    create_file,
+    create_folder,
+    copy_path,
+    detect_project,
+    build_text_index,
+    rag_query,
+    project_workflow_suggest,
+    delete_path,
+    describe_path,
+    count_dir_children_matches,
+    service_status,
+    service_restart,
+    service_health_report,
+    service_restart_with_deps,
+    service_wait_active,
+    apply_unified_patch,
+    install_packages,
+    disk_usage,
+    edit_file,
+    fuzzy_search_paths,
+    glob_find,
+    estimate_dir,
+    apply_template,
+    exists_path,
+    list_directory,
+    list_processes,
+    insert_after,
+    read_file,
+    move_path,
+    resolve_path,
+    rollback,
+    rollback_tokens,
+    run_command,
+    run_command_checked,
+    run_command_retry,
+    search_replace_in_file,
+    tail_file,
+    ast_list_functions,
+    ast_read_function,
+    docker_ps,
+    docker_logs,
+    docker_exec,
+    db_query_sqlite,
+    delegate_task,
+    schedule_agent_task,
+    policy_show,
+    policy_set,
+    policy_reset,
+)
+
+from apis import (
+    get_weather,
+    get_news,
+    web_search,
+    wikipedia_search,
+    translate_text,
+    get_ip_info,
+    get_crypto_price,
+    get_datetime_info,
+)
+
+from automation import (
+    open_application,
+    close_application,
+    get_volume,
+    set_volume,
+    toggle_mute,
+    take_screenshot,
+    set_wallpaper,
+    get_clipboard,
+    set_clipboard,
+    show_notification,
+    open_url,
+    lock_screen,
+    system_info,
+    get_battery,
+    set_brightness,
+    get_brightness,
+    empty_recycle_bin,
+)
+
+console = Console()
+
+MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
+MAX_TOOL_ROUNDS = int(os.environ.get("JARVIS_MAX_TOOL_ROUNDS", "12"))
+MAX_CONTEXT_MESSAGES = int(os.environ.get("JARVIS_MAX_CONTEXT_MESSAGES", "20"))
+MEMORY_UPDATE_EVERY = int(os.environ.get("JARVIS_MEMORY_UPDATE_EVERY", "5"))
+PLAN_MODE = os.environ.get("JARVIS_PLAN_MODE", "off")  # off | auto | confirm
+DRY_RUN = os.environ.get("JARVIS_DRY_RUN", "false").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
+PREVIEW_MUTATIONS = os.environ.get("JARVIS_PREVIEW_MUTATIONS", "true").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
+PREVIEW_CONFIRM_ALWAYS = os.environ.get("JARVIS_PREVIEW_CONFIRM_ALWAYS", "true").strip().lower() in (
+    "1", "true", "yes", "si", "sí", "on",
+)
+DIFF_MAX_LINES = int(os.environ.get("JARVIS_DIFF_MAX_LINES", "300"))
+BACKUP_MAX_AGE_DAYS = int(os.environ.get("JARVIS_BACKUP_MAX_AGE_DAYS", "7"))
+
+# Voice config
+INPUT_MODE = os.environ.get("JARVIS_INPUT_MODE", "auto")      # text | voice | auto
+VOICE_OUTPUT = os.environ.get("JARVIS_VOICE_OUTPUT", "true").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
+
+DEFAULT_MEMORY_PATH = os.environ.get(
+    "JARVIS_MEMORY_PATH",
+    os.path.join(os.path.expanduser("~"), ".jarvis", "memory.json"),
+)
+
+DEFAULT_LOG_PATH = os.environ.get(
+    "JARVIS_LOG_PATH",
+    os.path.join(os.path.expanduser("~"), ".jarvis", "agent_log.jsonl"),
+)
+
+DEFAULT_APP_DIR = os.environ.get("JARVIS_APP_DIR", os.path.join(os.getcwd(), ".jarvis"))
+UNDO_REDO_PATH = os.environ.get("JARVIS_UNDO_REDO_PATH", os.path.join(DEFAULT_APP_DIR, "undo_redo.json"))
+
+
+# ---------------------------------------------------------------------------
+# Tool groups — selección dinámica según la petición del usuario
+# ---------------------------------------------------------------------------
+
+def _build_tool_groups(available_tools: list) -> dict[str, list]:
+    """Construye grupos de herramientas indexados por nombre de función."""
+    by_name = {f.__name__: f for f in available_tools}
+
+    def _pick(*names: str) -> list:
+        return [by_name[n] for n in names if n in by_name]
+
+    return {
+        "files": _pick(
+            "create_file", "edit_file", "read_file", "search_replace_in_file",
+            "append_file", "insert_after", "delete_path", "copy_path", "move_path",
+            "list_directory", "glob_find", "exists_path", "describe_path",
+            "create_folder", "apply_template",
+        ),
+        "system": _pick(
+            "run_command", "run_command_checked", "run_command_retry",
+            "service_status", "service_restart", "service_health_report",
+            "service_restart_with_deps", "service_wait_active",
+            "list_processes", "disk_usage", "install_packages",
+        ),
+        "search": _pick(
+            "fuzzy_search_paths", "build_text_index", "rag_query",
+            "tail_file", "estimate_dir", "count_dir_children_matches",
+        ),
+        "project": _pick(
+            "detect_project", "project_workflow_suggest",
+            "apply_unified_patch", "ast_list_functions", "ast_read_function",
+        ),
+        "docker": _pick("docker_ps", "docker_logs", "docker_exec"),
+        "data":   _pick("db_query_sqlite"),
+        "admin":  _pick(
+            "rollback", "rollback_tokens", "policy_show", "policy_set",
+            "policy_reset", "resolve_path", "delegate_task", "schedule_agent_task",
+        ),
+        "apis": _pick(
+            "get_weather", "get_news", "web_search", "wikipedia_search",
+            "translate_text", "get_ip_info", "get_crypto_price", "get_datetime_info",
+        ),
+        "automation": _pick(
+            "open_application", "close_application", "get_volume", "set_volume",
+            "toggle_mute", "take_screenshot", "set_wallpaper", "get_clipboard",
+            "set_clipboard", "show_notification", "open_url", "lock_screen",
+            "system_info", "get_battery", "set_brightness", "get_brightness",
+            "empty_recycle_bin",
+        ),
+    }
+
+
+def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str, list]) -> list:
+    """Selecciona el subconjunto de herramientas relevantes para la petición."""
+    s = user_input.lower()
+    selected: list = []
+    added_names: set[str] = set()
+
+    def _add_group(group_name: str) -> None:
+        for t in tool_groups.get(group_name, []):
+            if t.__name__ not in added_names:
+                selected.append(t)
+                added_names.add(t.__name__)
+
+    # Archivos: siempre incluidos
+    _add_group("files")
+
+    # Sistema / comandos
+    if any(k in s for k in [
+        "ejecuta", "comando", "instala", "sudo", "script", "terminal",
+        "servicio", "service", "powershell", "cmd", "puerto", "proceso", "ps ",
+        "reinicia", "restart", "activo", "activa", "abre", "open",
+    ]):
+        _add_group("system")
+
+    # Búsqueda / RAG
+    if any(k in s for k in [
+        "busca", "encuentra", "search", "índice", "indice", "rag",
+        "fuzzy", "grep", "contiene", "ocurrencia",
+    ]):
+        _add_group("search")
+
+    # Proyecto / código
+    if any(k in s for k in [
+        "proyecto", "project", "test", "pytest", "función", "funcion",
+        "clase", "parche", "patch", "diff", "ast", "método", "metodo",
+        "compilar", "lint", "importa",
+    ]):
+        _add_group("project")
+
+    # Docker
+    if any(k in s for k in [
+        "docker", "contenedor", "container", "imagen", "compose",
+    ]):
+        _add_group("docker")
+
+    # Base de datos
+    if any(k in s for k in [
+        "sqlite", "base de datos", "sql", "db", "tabla", "query", "select",
+    ]):
+        _add_group("data")
+
+    # Admin / rollback / política
+    if any(k in s for k in [
+        "rollback", "deshacer", "política", "politica", "policy",
+        "delega", "agenda", "programa", "tarea programada",
+    ]):
+        _add_group("admin")
+
+    # APIs externas
+    if any(k in s for k in [
+        "clima", "tiempo", "weather", "temperatura", "pronóstico", "pronostico",
+        "lluvia", "llueve", "nieve", "viento",
+        "noticias", "news", "periódico", "periodico", "prensa",
+        "busca en", "búscame", "buscame", "web search", "google", "duckduckgo",
+        "wikipedia", "wiki", "qué es", "que es", "quién es", "quien es",
+        "traduce", "traducir", "translate", "traducción", "traduccion",
+        "mi ip", "ip pública", "ip publica", "ubicación", "ubicacion", "geolocaliza",
+        "bitcoin", "crypto", "cripto", "ethereum", "precio", "cotización", "cotizacion",
+        "hora en", "qué hora", "que hora", "fecha", "zona horaria",
+    ]):
+        _add_group("apis")
+
+    # Automatización del PC
+    if any(k in s for k in [
+        "abre", "abrir", "open", "cierra", "cerrar", "close",
+        "chrome", "firefox", "notepad", "spotify", "discord", "steam",
+        "vscode", "word", "excel", "teams", "calculadora", "calculator",
+        "volumen", "volume", "silencia", "mute", "audio",
+        "captura", "screenshot", "pantallazo",
+        "wallpaper", "fondo de escritorio", "fondo de pantalla",
+        "portapapeles", "clipboard", "copiar al", "pegar",
+        "notificación", "notificacion", "notification", "avísame", "avisame", "recuérdame", "recuerdame",
+        "url", "youtube", "github", "web", "página", "pagina", "sitio",
+        "bloquear", "bloquea", "lock",
+        "sistema", "system info", "ram", "cpu", "memoria ram",
+        "batería", "bateria", "battery",
+        "brillo", "brightness",
+        "papelera", "recycle", "vaciar",
+    ]):
+        _add_group("automation")
+
+    only_files = len(added_names) <= len(tool_groups.get("files", []))
+    if only_files and len(s.split()) > 6:
+        return available_tools
+
+    return selected
+
+
+# ---------------------------------------------------------------------------
+# Limpieza de backups antiguos
+# ---------------------------------------------------------------------------
+
+def _cleanup_old_backups(max_age_days: int = 7) -> None:
+    """Elimina backups con más de max_age_days días para no llenar el disco."""
+    try:
+        from tools import _backup_base_dir
+        base = _backup_base_dir()
+        cutoff = time.time() - max_age_days * 86400
+        files_cleaned = 0
+        for f in (base / "files").glob("*.bak"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+                    files_cleaned += 1
+            except Exception:
+                pass
+        for f in (base / "meta").glob("*.json"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except Exception:
+                pass
+        if files_cleaned:
+            console.print(f"[dim]🧹 Backups antiguos eliminados: {files_cleaned}[/dim]")
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Voice helpers
+# ---------------------------------------------------------------------------
+
+_speaker = None
+_listener = None
+
+
+def _get_speaker():
+    """Inicializa el speaker TTS de forma lazy."""
+    global _speaker
+    if _speaker is None:
+        try:
+            from voice import VoiceSpeaker
+            _speaker = VoiceSpeaker()
+        except Exception as e:
+            console.print(f"[dim yellow]⚠ TTS no disponible: {e}[/dim yellow]")
+    return _speaker
+
+
+def _get_listener():
+    """Inicializa el listener STT de forma lazy."""
+    global _listener
+    if _listener is None:
+        try:
+            from voice import VoiceListener
+            _listener = VoiceListener()
+            if not _listener.is_available():
+                console.print("[dim yellow]⚠ No se detectó micrófono[/dim yellow]")
+                _listener = None
+        except Exception as e:
+            console.print(f"[dim yellow]⚠ STT no disponible: {e}[/dim yellow]")
+    return _listener
+
+
+def _speak(text: str) -> None:
+    """Habla el texto si la voz está habilitada."""
+    if not VOICE_OUTPUT:
+        return
+    speaker = _get_speaker()
+    if speaker:
+        speaker.speak_async(text)
+
+
+def _listen() -> str | None:
+    """Escucha del micrófono y retorna texto reconocido, o None."""
+    listener = _get_listener()
+    if listener is None:
+        return None
+    try:
+        from voice import WAKE_WORD
+        console.print("[dim cyan]🎤 Escuchando...[/dim cyan]", end="")
+        text = listener.listen_for_wake_word(WAKE_WORD)
+        if text:
+            console.print(f" [bold green]{text}[/bold green]")
+        else:
+            console.print(" [dim](no reconocido)[/dim]")
+        return text
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Funciones del chat
+# ---------------------------------------------------------------------------
+
+def _chat_options() -> dict[str, Any]:
+    opts: dict[str, Any] = {}
+    if ctx := os.environ.get("OLLAMA_NUM_CTX"):
+        try:
+            opts["num_ctx"] = int(ctx)
+        except ValueError:
+            pass
+    if t := os.environ.get("OLLAMA_TEMPERATURE"):
+        try:
+            opts["temperature"] = float(t)
+        except ValueError:
+            pass
+    return opts
+
+
+def _load_undo_redo_state() -> dict[str, Any]:
+    try:
+        p = Path(UNDO_REDO_PATH).expanduser()
+        if not p.is_file():
+            return {"undo": [], "redo": []}
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {"undo": [], "redo": []}
+        data.setdefault("undo", [])
+        data.setdefault("redo", [])
+        return data
+    except Exception:
+        return {"undo": [], "redo": []}
+
+
+def _save_undo_redo_state(state: dict[str, Any]) -> None:
+    try:
+        p = Path(UNDO_REDO_PATH).expanduser()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(p)
+    except Exception:
+        pass
+
+
+SYSTEM_PROMPT = """Eres JARVIS, un asistente personal inteligente para Windows. Tu nombre es JARVIS y estás aquí para ayudar al usuario con cualquier tarea en su sistema Windows.
+
+## Reglas
+- Responde en español, claro y directo. Sé amable pero conciso.
+- Para crear/editar/leer archivos, listar carpetas, buscar rutas o ejecutar comandos del sistema, usa SIEMPRE las herramientas disponibles en lugar de inventar resultados.
+- Antes de editar un archivo grande, lee su contenido con read_file o usa search_replace_in_file para cambios localizados.
+- Si el usuario menciona rutas "humanas" como `Documents`, `Descargas`, `Escritorio` o similares, usa `resolve_path` para mapearlas a la carpeta real dentro del perfil.
+- Para ejecutar comandos en Windows, usa `run_command`. Por defecto usa PowerShell. Puedes especificar `shell="cmd"` para cmd o `shell="bash"` para WSL.
+- Para borrar usa `delete_path` (mueve a Papelera de Reciclaje si está activo). Si es una carpeta con `recursive=true`, confirma (`confirm=true`) siempre.
+- Para instalar programas, usa `install_packages` con winget/choco/scoop.
+- Para servicios de Windows, usa `service_status`, `service_restart`, etc. (equivalentes a Get-Service/Restart-Service).
+- Para cambios de texto pequeños, prefiere `append_file` o `insert_after` antes de reescribir archivos completos.
+- run_command ejecuta shell real: no uses comandos destructivos salvo que el usuario lo pida explícitamente.
+- Si una herramienta falla, interpreta el mensaje de error y reintenta con argumentos corregidos o explica qué falta.
+- Si no necesitas herramientas, responde en texto normal.
+- Cuando respondas, recuerda que el usuario puede estar escuchándote por voz. Sé natural y conversacional.
+
+## APIs disponibles (información del mundo exterior)
+- `get_weather`: clima actual y pronóstico para cualquier ciudad (wttr.in, gratis).
+- `get_news`: noticias de feeds RSS (El País, BBC, HackerNews, etc.).
+- `web_search`: búsqueda web con DuckDuckGo.
+- `wikipedia_search`: artículos de Wikipedia en cualquier idioma.
+- `translate_text`: traducción entre idiomas (MyMemory API).
+- `get_ip_info`: información de IP pública y geolocalización.
+- `get_crypto_price`: precios de criptomonedas (CoinGecko).
+- `get_datetime_info`: fecha y hora en cualquier zona horaria del mundo.
+
+## Automatización del PC
+- `open_application` / `close_application`: abrir/cerrar apps por nombre (Chrome, Notepad, VSCode, Spotify, etc.).
+- `set_volume` / `get_volume` / `toggle_mute`: control de volumen del sistema.
+- `take_screenshot`: capturar la pantalla.
+- `set_wallpaper`: cambiar fondo de escritorio.
+- `get_clipboard` / `set_clipboard`: leer/escribir portapapeles.
+- `show_notification`: mostrar notificaciones del sistema.
+- `open_url`: abrir URLs o sitios web (YouTube, GitHub, Gmail, etc.).
+- `lock_screen`: bloquear la pantalla (requiere confirm=true).
+- `system_info`: información de CPU, RAM, disco, red, uptime.
+- `get_battery`: estado de la batería.
+- `set_brightness` / `get_brightness`: control de brillo.
+- `empty_recycle_bin`: vaciar papelera (requiere confirm=true).
+
+## Contexto
+Estás en una sesión interactiva en un sistema Windows. El directorio de trabajo del proceso es el cwd del usuario al lanzar el programa. Usa rutas absolutas cuando el usuario las dé, o relativas al cwd actual."""
+
+
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _load_memory(memory_path: str) -> dict[str, Any]:
+    try:
+        p = Path(memory_path).expanduser()
+        if not p.is_file():
+            return {
+                "memory_summary": "",
+                "stable_facts": [],
+                "preferences": {},
+                "last_updated": "",
+                "last_turns": [],
+            }
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("memory.json no es un objeto JSON")
+        data.setdefault("memory_summary", "")
+        data.setdefault("stable_facts", [])
+        data.setdefault("preferences", {})
+        data.setdefault("last_updated", "")
+        data.setdefault("last_turns", [])
+        return data
+    except Exception:
+        return {
+            "memory_summary": "",
+            "stable_facts": [],
+            "preferences": {},
+            "last_updated": "",
+            "last_turns": [],
+        }
+
+
+def _save_memory(memory_path: str, memory: dict[str, Any]) -> None:
+    p = Path(memory_path).expanduser()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(memory, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(p)
+
+
+def _build_prefix_messages(memory: dict[str, Any]) -> list[dict[str, Any]]:
+    prefix: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if memory.get("memory_summary"):
+        prefix.append({
+            "role": "system",
+            "content": "Memoria persistente del usuario (resumen estable):\n" + str(memory.get("memory_summary")),
+        })
+    if memory.get("stable_facts"):
+        prefix.append({
+            "role": "system",
+            "content": "Hechos estables del usuario:\n"
+            + "\n".join(str(x) for x in (memory.get("stable_facts") or [])[:50]),
+        })
+    if memory.get("preferences"):
+        prefix.append({
+            "role": "system",
+            "content": "Preferencias detectadas del usuario (para decidir rutas y estilo):\n"
+            + json.dumps(memory.get("preferences") or {}, ensure_ascii=False),
+        })
+    return prefix
+
+
+def _prune_messages(messages: list[dict[str, Any]], keep_last: int) -> list[dict[str, Any]]:
+    if len(messages) <= keep_last:
+        return messages
+    prefix = messages[:2] if len(messages) >= 2 and messages[0].get("role") == "system" else messages[:1]
+    tail = messages[-(keep_last - len(prefix)):]
+    return prefix + tail
+
+
+def _extract_recent_for_memory(messages: list[dict[str, Any]], max_items: int = 10) -> list[dict[str, Any]]:
+    reduced: list[dict[str, Any]] = []
+    for m in messages:
+        if m.get("role") in ("user", "assistant", "system"):
+            reduced.append({"role": m.get("role"), "content": m.get("content", "")})
+    reduced = [m for m in reduced if m["role"] in ("user", "assistant")]
+    return reduced[-max_items:]
+
+
+def _heuristic_requires_tools(user_input: str) -> bool:
+    s = user_input.lower()
+    keywords = [
+        "crear", "editar", "actualizar", "borrar", "eliminar", "borra",
+        "carpeta", "directorio", "archivo", "comando", "ejecuta", "instalar",
+        "abre", "abre ", "listar", "busca",
+    ]
+    return any(k in s for k in keywords)
+
+
+def _plan_turn(user_input: str, messages: list[dict[str, Any]], opts: dict[str, Any]) -> dict[str, Any]:
+    planning_user = {
+        "role": "user",
+        "content": (
+            "Necesito un PLAN ANTES de ejecutar acciones con herramientas.\n"
+            "Devuelve SOLO JSON válido con estas claves:\n"
+            "- requires_tools (boolean)\n"
+            "- summary (string)\n"
+            "- steps (lista de strings, máximo 8)\n"
+            "- safety_notes (lista de strings, máximo 5)\n\n"
+            f"Tarea del usuario: {user_input}"
+        ),
+    }
+    planning_messages = messages[:] + [planning_user]
+    plan_opts = dict(opts)
+    plan_opts["temperature"] = 0.1
+    try:
+        response = chat(model=MODEL, messages=planning_messages, options=plan_opts or None)
+        content = response["message"].get("content") or ""
+        parsed = json.loads(content)
+        if isinstance(parsed, dict):
+            if "requires_tools" not in parsed:
+                parsed["requires_tools"] = _heuristic_requires_tools(user_input)
+            return parsed
+    except Exception:
+        pass
+    return {
+        "requires_tools": _heuristic_requires_tools(user_input),
+        "summary": "Plan aproximado (sin respuesta JSON válida).",
+        "steps": [],
+        "safety_notes": [],
+    }
+
+
+def _update_memory(
+    messages: list[dict[str, Any]],
+    memory: dict[str, Any],
+    opts: dict[str, Any],
+) -> dict[str, Any]:
+    recent = _extract_recent_for_memory(messages, max_items=10)
+    if not recent:
+        return memory
+    mem_prompt = {
+        "role": "system",
+        "content": (
+            "Actualiza la memoria persistente. Devuelve SOLO JSON válido con las claves: "
+            "`memory_summary` (string), `stable_facts` (lista de strings), `preferences` (objeto). "
+            "No incluyas markdown ni explicaciones fuera del JSON. "
+            "Regla: solo agrega información que sea estable (preferencias) y un resumen corto de lo ocurrido."
+        ),
+    }
+    user_payload = {
+        "current_memory_summary": memory.get("memory_summary", ""),
+        "recent_turns": recent,
+    }
+    mem_options = dict(opts)
+    mem_options["temperature"] = 0.1
+    response = chat(
+        model=MODEL,
+        messages=[mem_prompt, {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}],
+        options=mem_options or None,
+    )
+    content = response["message"].get("content") or ""
+    try:
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            raise ValueError("JSON no es objeto")
+        memory["memory_summary"] = str(parsed.get("memory_summary") or "").strip()
+        memory["stable_facts"] = list(parsed.get("stable_facts") or [])
+        new_prefs = parsed.get("preferences") or {}
+        if isinstance(new_prefs, dict):
+            memory["preferences"] = {**(memory.get("preferences") or {}), **new_prefs}
+        else:
+            memory["preferences"] = memory.get("preferences") or {}
+        memory["last_updated"] = _now_iso()
+        return memory
+    except Exception:
+        return memory
+
+
+def _normalize_tool_arguments(raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+            return dict(parsed) if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _run_tool_loop(
+    messages: list,
+    available_tools: list,
+    tool_map: dict,
+    options: dict[str, Any],
+) -> str:
+    rounds = 0
+    reply_content = ""
+    hit_round_limit = False
+    rollback_tokens_accum: list[str] = []
+
+    while rounds < MAX_TOOL_ROUNDS:
+        rounds += 1
+        with console.status("[bold cyan]Pensando…[/bold cyan]", spinner="dots"):
+            response = chat(
+                model=MODEL,
+                messages=messages,
+                tools=available_tools,
+                options=options or None,
+            )
+        response_message = response["message"]
+        messages.append(response_message)
+
+        tool_calls = response_message.get("tool_calls") or []
+        if not tool_calls:
+            reply_content = response_message.get("content") or ""
+            break
+
+        for tool_call in tool_calls:
+            fn = tool_call.get("function") or {}
+            function_name = fn.get("name") or ""
+            arguments = _normalize_tool_arguments(fn.get("arguments"))
+            args_preview = json.dumps(arguments, ensure_ascii=False)
+            if len(args_preview) > 500:
+                args_preview = args_preview[:500] + "…"
+
+            console.print(f"[dim italic]⚙ {function_name}({args_preview})[/dim italic]")
+
+            mutation_tools = {
+                "create_file", "edit_file", "search_replace_in_file",
+                "create_folder", "append_file", "insert_after",
+                "delete_path", "run_command", "copy_path", "move_path",
+            }
+
+            tool_risk = {
+                "run_command": "high", "delete_path": "high",
+                "service_restart": "high", "service_restart_with_deps": "high",
+                "service_health_report": "low", "service_wait_active": "medium",
+                "move_path": "medium", "copy_path": "medium",
+                "edit_file": "medium", "search_replace_in_file": "medium",
+                "apply_unified_patch": "high", "install_packages": "high",
+                "append_file": "medium", "insert_after": "medium",
+                "create_file": "medium", "create_folder": "low",
+            }
+            need_human_confirm = (
+                PREVIEW_CONFIRM_ALWAYS
+                or PLAN_MODE == "confirm"
+                or tool_risk.get(function_name) == "high"
+            )
+
+            try:
+                sensitive_prefixes = ["C:\\Windows\\", "C:\\Program Files"]
+                sensitive_substrings = ["\\.ssh", "\\.gnupg", "\\.kube", "\\AppData\\"]
+                path_guess = None
+                if function_name == "delete_path":
+                    path_guess = arguments.get("path")
+                elif function_name in ("edit_file", "search_replace_in_file", "read_file", "append_file", "insert_after", "apply_unified_patch"):
+                    path_guess = arguments.get("path") or arguments.get("destination") or arguments.get("workdir")
+                elif function_name in ("copy_path", "move_path"):
+                    path_guess = arguments.get("to_path") or arguments.get("from_path")
+                if path_guess:
+                    resolved = resolve_path(str(path_guess), must_exist=True)
+                    if not str(resolved).startswith("Error:"):
+                        r = str(resolved)
+                        if any(r.lower().startswith(p.lower()) for p in sensitive_prefixes) or any(s.lower() in r.lower() for s in sensitive_substrings):
+                            need_human_confirm = True
+            except Exception:
+                pass
+
+            if function_name in ("copy_path", "move_path") and bool(arguments.get("overwrite")):
+                need_human_confirm = True
+            if function_name in ("apply_unified_patch", "install_packages", "service_restart"):
+                if not bool(arguments.get("confirm")) and not bool(arguments.get("allow_dangerous")):
+                    need_human_confirm = True
+            result = ""
+
+            if PREVIEW_MUTATIONS and function_name in mutation_tools:
+                preview = ""
+                try:
+                    if function_name == "delete_path":
+                        p = arguments.get("path") or ""
+                        rec = bool(arguments.get("recursive"))
+                        preview = f"Destino: {describe_path(p)}"
+                        if rec:
+                            preview += "\nAlcance (estimado): " + estimate_dir(p, max_entries=1000)
+                            if arguments.get("glob_filter"):
+                                preview += f"\nFiltro: glob_filter={arguments.get('glob_filter')!r}"
+                                try:
+                                    m = count_dir_children_matches(p, arguments.get("glob_filter") or "", show_hidden=False)
+                                    preview += f"\nCoincidencias inmediatas: {m}"
+                                except Exception:
+                                    pass
+                    elif function_name in ("create_file", "edit_file", "read_file"):
+                        preview = "Destino: " + describe_path(arguments.get("path") or "")
+                    elif function_name == "create_folder":
+                        preview = "Carpeta: " + describe_path(arguments.get("path") or "")
+                    elif function_name in ("append_file", "insert_after"):
+                        preview = "Destino: " + describe_path(arguments.get("path") or "")
+                    elif function_name in ("copy_path", "move_path"):
+                        preview = (
+                            f"Origen: {describe_path(arguments.get('from_path') or '')}\n"
+                            f"Destino: {describe_path(arguments.get('to_path') or '')}"
+                        )
+                    elif function_name == "run_command":
+                        preview = f"Comando: {arguments.get('command') or ''}"
+                    elif function_name == "search_replace_in_file":
+                        preview = "Archivo: " + describe_path(arguments.get("path") or "")
+                except Exception:
+                    preview = "(sin previsualización)"
+
+                if preview:
+                    console.print(f"[dim]Preflight:[/dim]\n{preview}")
+
+                try:
+                    if function_name == "edit_file":
+                        p = arguments.get("path") or ""
+                        old = read_file(p, max_chars=80000)
+                        if isinstance(old, str) and not old.startswith("Error:") and old.strip():
+                            new_content = arguments.get("new_content") or ""
+                            if str(p).lower().endswith(".json"):
+                                try:
+                                    old_obj = json.loads(old)
+                                    new_obj = json.loads(new_content)
+                                    if isinstance(old_obj, dict) and isinstance(new_obj, dict):
+                                        old_keys = set(old_obj.keys())
+                                        new_keys = set(new_obj.keys())
+                                        added = sorted(list(new_keys - old_keys))[:20]
+                                        removed = sorted(list(old_keys - new_keys))[:20]
+                                        changed = [k for k in list(old_keys & new_keys)[:50] if old_obj.get(k) != new_obj.get(k)]
+                                        if added or removed or changed:
+                                            console.print(f"[dim]JSON keys diff:[/dim] added={added} removed={removed} changed_head={changed[:20]}")
+                                except Exception:
+                                    pass
+                            diff_lines_iter = difflib.unified_diff(
+                                old.splitlines(True), new_content.splitlines(True),
+                                fromfile="before", tofile="after", n=3,
+                            )
+                            diff_lines_list = list(diff_lines_iter)
+                            diff_text = "".join(diff_lines_list[:DIFF_MAX_LINES])
+                            if diff_text.strip():
+                                console.print(f"[dim]Diff (preview):[/dim]\n{diff_text}")
+                            changed_lines = [
+                                l for l in diff_lines_list
+                                if (l.startswith("+") or l.startswith("-"))
+                                and not l.startswith("+++") and not l.startswith("---")
+                            ]
+                            if len(changed_lines) > 60 or len(diff_lines_list) > 200:
+                                if need_human_confirm and not DRY_RUN and not result:
+                                    ans = Prompt.ask("Este `edit_file` parece un cambio grande. ¿Confirmas? (s/N)", default="N").strip().lower()
+                                    if ans not in ("s", "si", "sí", "y", "yes"):
+                                        result = "Acción cancelada por el usuario."
+                            elif len(changed_lines) <= 10 and not DRY_RUN:
+                                console.print("[dim]Sugerencia: para cambios pequeños, intenta `search_replace_in_file`/`insert_after` en vez de `edit_file` completo.[/dim]")
+
+                    elif function_name == "search_replace_in_file":
+                        p = arguments.get("path") or ""
+                        old = read_file(p, max_chars=80000)
+                        if isinstance(old, str) and not old.startswith("Error:"):
+                            old_text = arguments.get("old_text") or ""
+                            new_text = arguments.get("new_text") or ""
+                            replace_all = bool(arguments.get("replace_all"))
+                            if old_text in old:
+                                predicted = old.replace(old_text, new_text) if replace_all else old.replace(old_text, new_text, 1)
+                                diff_lines = difflib.unified_diff(
+                                    old.splitlines(True), predicted.splitlines(True),
+                                    fromfile="before", tofile="after", n=3,
+                                )
+                                diff_text = "".join(list(diff_lines)[:DIFF_MAX_LINES])
+                                if diff_text.strip():
+                                    console.print(f"[dim]Diff (preview):[/dim]\n{diff_text}")
+                except Exception:
+                    pass
+
+            if function_name == "delete_path" and bool(arguments.get("recursive")) and not arguments.get("confirm"):
+                if need_human_confirm and not DRY_RUN:
+                    p = arguments.get("path") or ""
+                    console.print(f"[bold yellow]Confirmación requerida:[/bold yellow] borrado recursivo de {p}")
+                    console.print("Alcance (estimado): " + estimate_dir(p, max_entries=1000))
+                    ans = Prompt.ask("¿Confirmas? (s/N)", default="N").strip().lower()
+                    if ans in ("s", "si", "sí", "y", "yes"):
+                        arguments["confirm"] = True
+                    else:
+                        result = "Acción cancelada por el usuario."
+                if DRY_RUN:
+                    result = "DRY_RUN: cancelado por preflight (confirm=false)."
+
+            if function_name == "run_command" and bool(arguments.get("allow_dangerous")) and not result:
+                if need_human_confirm and not DRY_RUN:
+                    cmd = arguments.get("command") or ""
+                    ans = Prompt.ask(f"Ejecutar comando peligroso?\n{cmd}\n(s/N)", default="N").strip().lower()
+                    if ans not in ("s", "si", "sí", "y", "yes"):
+                        result = "Acción cancelada por el usuario."
+
+            if not result and DRY_RUN and function_name in mutation_tools:
+                result = "DRY_RUN: acción no ejecutada (previsualización mostrada)."
+
+            if not result:
+                if function_name in tool_map:
+                    func = tool_map[function_name]
+                    try:
+                        result = func(**arguments)
+                    except TypeError as e:
+                        result = f"Error de argumentos para {function_name}: {e}"
+                    except Exception as e:
+                        result = f"Error: {e}"
+                else:
+                    result = f"Herramienta desconocida: {function_name}"
+
+            if (
+                function_name == "resolve_path"
+                and isinstance(result, str)
+                and "CANDIDATES_JSON=" in result
+                and not DRY_RUN
+            ):
+                try:
+                    m = re.search(r"CANDIDATES_JSON=([\s\S]*?)\.\s*Repite", result)
+                    if not m:
+                        m = re.search(r"CANDIDATES_JSON=([\s\S]*)", result)
+                    if m:
+                        candidates = json.loads(m.group(1).strip())
+                        if isinstance(candidates, list) and candidates:
+                            console.print("[bold yellow]Resolución de ruta ambigua:[/bold yellow]")
+                            for i, c in enumerate(candidates[:10]):
+                                console.print(f"{i+1}. {c.get('name')} (score={c.get('score')}) -> {c.get('path')}")
+                            auto_pref = os.environ.get("JARVIS_AUTO_RESOLVE_AMBIGUOUS", "").strip().lower()
+                            chosen_path = None
+                            if auto_pref in ("", "none", "off"):
+                                ans = Prompt.ask("Elige número", default="1").strip()
+                                idx = int(ans) - 1
+                                if 0 <= idx < len(candidates):
+                                    chosen_path = candidates[idx].get("path")
+                            elif auto_pref in ("first", "0"):
+                                chosen_path = candidates[0].get("path")
+                            elif auto_pref in ("best", "best_score", "mejor", "mejor_score"):
+                                chosen_path = candidates[0].get("path")
+                            elif auto_pref in ("mtime_recent", "mtime_newest", "reciente", "nuevo"):
+                                best_ts = -1.0
+                                for c in candidates:
+                                    cp = c.get("path")
+                                    if not cp:
+                                        continue
+                                    try:
+                                        ts = os.path.getmtime(str(cp))
+                                    except Exception:
+                                        ts = -1.0
+                                    if ts > best_ts:
+                                        best_ts = ts
+                                        chosen_path = cp
+                            else:
+                                ans = Prompt.ask("Elige número", default="1").strip()
+                                idx = int(ans) - 1
+                                if 0 <= idx < len(candidates):
+                                    chosen_path = candidates[idx].get("path")
+                            if chosen_path:
+                                result = str(chosen_path)
+                except Exception:
+                    pass
+
+            if result and not str(result).startswith("Error"):
+                m = re.search(r"ROLLBACK_TOKEN=([a-fA-F0-9]+)", str(result))
+                if m:
+                    rollback_tokens_accum.append(m.group(1))
+                m2 = re.search(r"ROLLBACK_TOKENS=([a-zA-Z0-9,-]+)", str(result))
+                if m2:
+                    toks = [x.strip() for x in m2.group(1).split(",") if x.strip()]
+                    rollback_tokens_accum.extend(toks)
+
+            if result and str(result).startswith("Error") and rollback_tokens_accum and not DRY_RUN:
+                try:
+                    rb_func = tool_map.get("rollback_tokens")
+                    if rb_func:
+                        tokens_str = ",".join(reversed(rollback_tokens_accum))
+                        rb_res = rb_func(tokens=tokens_str, overwrite=True)
+                        messages.append({"role": "tool", "name": "rollback_tokens", "content": str(rb_res)})
+                    return "Ocurrió un error durante la ejecución de herramientas. Se intentó un rollback automático del último estado."
+                except Exception:
+                    return "Ocurrió un error durante la ejecución de herramientas (rollback automático falló)."
+
+            rpreview = str(result)
+            if len(rpreview) > 1200:
+                rpreview = rpreview[:1200] + "…"
+            console.print(f"[dim green]→ {rpreview}[/dim green]")
+
+            tool_content = str(result)
+            if len(tool_content) > 16000:
+                tool_content = tool_content[:16000] + "\n[...Truncado por seguridad de memoria...]"
+
+            tool_msg: dict[str, Any] = {"role": "tool", "content": tool_content}
+            if function_name:
+                tool_msg["name"] = function_name
+            messages.append(tool_msg)
+
+            if (
+                str(result).startswith("Error")
+                and os.environ.get("JARVIS_TOOL_ERROR_HINT", "true").strip().lower()
+                in ("1", "true", "yes", "si", "sí", "on")
+            ):
+                messages.append({
+                    "role": "system",
+                    "content": f"Corrige los argumentos de la tool `{function_name}` para resolver el error: {str(result)[:800]}",
+                })
+
+        if rounds >= MAX_TOOL_ROUNDS:
+            hit_round_limit = True
+            break
+
+    if hit_round_limit and not reply_content.strip():
+        messages.append({
+            "role": "user",
+            "content": "Resume en español qué hiciste y qué falta; no llames más herramientas en esta respuesta.",
+        })
+        with console.status("[bold cyan]Síntesis…[/bold cyan]", spinner="dots"):
+            final = chat(model=MODEL, messages=messages, options=options or None)
+        final_msg = final["message"]
+        messages.append(final_msg)
+        reply_content = final_msg.get("content") or ""
+
+    if hit_round_limit and not reply_content.strip():
+        reply_content = (
+            "Se alcanzó el límite de rondas de herramientas (JARVIS_MAX_TOOL_ROUNDS). "
+            "Repite la petición o aumenta el límite."
+        )
+
+    return reply_content
+
+
+def _is_simple_conversational(text: str) -> bool:
+    """Detecta preguntas que claramente no necesitan herramientas."""
+    s = text.lower().strip()
+    simple_patterns = [
+        r"^hola",
+        r"^(qu[eé] eres|qui[eé]n eres)",
+        r"^(qu[eé] puedes hacer|qu[eé] sabes hacer)",
+        r"^(buenos? d[ií]as?|buenas? tardes?|buenas? noches?)",
+        r"^(c[oó]mo est[aá]s|qu[eé] tal)",
+        r"^(gracias|de nada|ok|vale|perfecto|entendido)",
+        r"^(ayuda|help)$",
+        r"^jarvis",
+    ]
+    return any(re.search(p, s) for p in simple_patterns)
+
+
+def _run_simple_chat_streaming(messages: list, options: dict) -> str:
+    """Versión con streaming para respuestas visibles inmediatamente."""
+    full_response = ""
+    sentence_buffer = ""
+    console.print("\n[bold purple]JARVIS:[/bold purple] ", end="")
+    try:
+        stream = chat(model=MODEL, messages=messages, options=options or None, stream=True)
+        for chunk in stream:
+            token = chunk.get("message", {}).get("content") or ""
+            console.print(token, end="")
+            full_response += token
+
+            # Voice streaming: acumular y hablar oraciones completas
+            if VOICE_OUTPUT:
+                sentence_buffer += token
+                speaker = _get_speaker()
+                if speaker:
+                    from voice import speak_sentence_stream
+                    sentence_buffer = speak_sentence_stream(speaker, sentence_buffer)
+
+        console.print()
+
+        # Hablar el buffer restante
+        if VOICE_OUTPUT and sentence_buffer.strip():
+            speaker = _get_speaker()
+            if speaker:
+                speaker.speak_async(sentence_buffer.strip())
+    except Exception as e:
+        console.print(f"\n[red]Error de stream: {e}[/red]")
+    return full_response
+
+
+def main():
+    opts = _chat_options()
+    memory_path = os.path.abspath(DEFAULT_MEMORY_PATH)
+    log_path = os.path.abspath(DEFAULT_LOG_PATH)
+    memory = _load_memory(memory_path)
+    prefix_messages = _build_prefix_messages(memory)
+    messages: list[dict[str, Any]] = prefix_messages[:]
+
+    try:
+        prefs = memory.get("preferences") or {}
+        ws_root = prefs.get("workspace_root") if isinstance(prefs, dict) else None
+        if ws_root:
+            resolved_ws = resolve_path(str(ws_root), must_exist=True)
+            if not str(resolved_ws).startswith("Error:"):
+                os.chdir(str(resolved_ws))
+    except Exception:
+        pass
+
+    available_tools = [
+        # Files
+        create_file, append_file, apply_template, apply_unified_patch,
+        read_file, edit_file, search_replace_in_file, create_folder,
+        insert_after, copy_path, detect_project, install_packages,
+        move_path, resolve_path, delete_path, exists_path, describe_path,
+        estimate_dir, count_dir_children_matches, disk_usage,
+        # System
+        service_status, service_restart, service_wait_active,
+        service_health_report, service_restart_with_deps,
+        list_processes, tail_file, fuzzy_search_paths,
+        build_text_index, rag_query, project_workflow_suggest,
+        list_directory, glob_find, run_command, run_command_checked,
+        run_command_retry, policy_show, policy_set, policy_reset,
+        rollback, rollback_tokens, ast_list_functions, ast_read_function,
+        docker_ps, docker_logs, docker_exec, db_query_sqlite,
+        delegate_task, schedule_agent_task,
+        # APIs
+        get_weather, get_news, web_search, wikipedia_search,
+        translate_text, get_ip_info, get_crypto_price, get_datetime_info,
+        # Automation
+        open_application, close_application, get_volume, set_volume,
+        toggle_mute, take_screenshot, set_wallpaper, get_clipboard,
+        set_clipboard, show_notification, open_url, lock_screen,
+        system_info, get_battery, set_brightness, get_brightness,
+        empty_recycle_bin,
+    ]
+
+    tool_map = {f.__name__: f for f in available_tools}
+    tool_groups = _build_tool_groups(available_tools)
+    _turn_counter = 0
+
+    # Limpieza de backups antiguos al arrancar
+    _cleanup_old_backups(max_age_days=BACKUP_MAX_AGE_DAYS)
+
+    # Detectar modo de entrada
+    import sys
+    text_only = "--text-only" in sys.argv
+
+    # Determinar el input mode efectivo
+    effective_input = INPUT_MODE
+    if text_only:
+        effective_input = "text"
+
+    voice_status = "🎤 Voz activa" if effective_input != "text" else "🔇 Solo texto"
+    tts_status = "🔊 TTS activo" if VOICE_OUTPUT else "🔇 TTS desactivado"
+
+    console.print(
+        Panel.fit(
+            f"[bold blue]JARVIS[/bold blue] — asistente personal para Windows (modelo [cyan]{MODEL}[/cyan])\n"
+            f"{voice_status} | {tts_status}\n"
+            "Escribe salir / exit / quit para terminar.\n"
+            "Comandos: `ver memoria`, `reset memoria`, `workspace show`, `set workspace <ruta>`, `voces`.\n"
+            f"[dim]Opciones: OLLAMA_MODEL, JARVIS_INPUT_MODE, JARVIS_VOICE_OUTPUT, JARVIS_WAKE_WORD[/dim]",
+            border_style="blue",
+        )
+    )
+
+    # Saludo inicial por voz
+    if VOICE_OUTPUT and not text_only:
+        _speak("JARVIS activo. ¿En qué puedo ayudarte?")
+
+    if "--server" in sys.argv:
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        class JarvisAPI(BaseHTTPRequestHandler):
+            def do_POST(self):
+                if self.path == '/api/chat':
+                    length = int(self.headers.get('Content-Length', '0'))
+                    post_data = self.rfile.read(length)
+                    data = json.loads(post_data.decode('utf-8'))
+                    prompt = data.get('prompt', '')
+                    msgs = prefix_messages[:] + [{"role": "user", "content": prompt}]
+                    active = _select_tools(prompt, available_tools, tool_groups)
+                    reply = _run_tool_loop(msgs, active, tool_map, opts)
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"response": reply}, ensure_ascii=False).encode('utf-8'))
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+        server_address = ('', 8080)
+        httpd = HTTPServer(server_address, JarvisAPI)
+        console.print("[bold green]Starting JARVIS server on port 8080...[/bold green]")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        return
+
+    if "--run-prompt" in sys.argv:
+        idx = sys.argv.index("--run-prompt")
+        if idx + 1 < len(sys.argv):
+            prompt = sys.argv[idx + 1]
+            msgs = prefix_messages[:] + [{"role": "user", "content": prompt}]
+            active = _select_tools(prompt, available_tools, tool_groups)
+            reply = _run_tool_loop(msgs, active, tool_map, opts)
+            console.print(Markdown(reply))
+            if VOICE_OUTPUT:
+                _speak(reply)
+        return
+
+    while True:
+        try:
+            user_input = None
+
+            # Modo de entrada
+            if effective_input == "voice":
+                # Solo voz
+                user_input = _listen()
+                if not user_input:
+                    continue
+            elif effective_input == "auto":
+                # Mixto: primero intenta texto, si está vacío escucha por voz
+                try:
+                    user_input = Prompt.ask("\n[bold green]Tú[/bold green] [dim](o di 'Jarvis...')[/dim]")
+                except EOFError:
+                    break
+                if not user_input.strip():
+                    user_input = _listen()
+                    if not user_input:
+                        continue
+            else:
+                # Solo texto
+                try:
+                    user_input = Prompt.ask("\n[bold green]Tú[/bold green]")
+                except EOFError:
+                    break
+
+            if user_input.lower() in ("salir", "exit", "quit"):
+                _speak("¡Hasta luego!")
+                console.print("[bold yellow]¡Hasta luego![/bold yellow]")
+                break
+
+            if not user_input.strip():
+                continue
+
+            low = user_input.lower().strip()
+
+            if low in ("reset memoria", "olvidar memoria", "borrar memoria"):
+                memory = {"memory_summary": "", "stable_facts": [], "preferences": {}, "last_updated": "", "last_turns": []}
+                _save_memory(memory_path, memory)
+                messages = _build_prefix_messages(memory)
+                console.print("[dim]Memoria reiniciada. Empiezas con contexto limpio.[/dim]")
+                _speak("Memoria reiniciada.")
+                continue
+
+            if low == "ver memoria":
+                console.print("\n[bold purple]Memoria persistente:[/bold purple]")
+                console.print(Markdown(memory.get("memory_summary") or "(vacía)"))
+                stable_facts = memory.get("stable_facts") or []
+                if stable_facts:
+                    console.print("\n[dim]Hechos estables:[/dim]")
+                    for fact in stable_facts[:20]:
+                        console.print(f"- {fact}")
+                continue
+
+            if low == "voces":
+                speaker = _get_speaker()
+                if speaker:
+                    voices = speaker.list_voices()
+                    console.print("\n[bold purple]Voces TTS disponibles:[/bold purple]")
+                    for v in voices:
+                        console.print(f"- {v.get('name', '?')} ({v.get('id', '?')})")
+                else:
+                    console.print("[dim]TTS no disponible[/dim]")
+                continue
+
+            if low == "micrófonos" or low == "microfonos":
+                listener = _get_listener()
+                if listener:
+                    mics = listener.list_microphones()
+                    console.print("\n[bold purple]Micrófonos disponibles:[/bold purple]")
+                    for i, mic_name in enumerate(mics):
+                        console.print(f"{i}. {mic_name}")
+                else:
+                    console.print("[dim]STT no disponible[/dim]")
+                continue
+
+            if low in ("undo last", "undo último", "undo ultimo"):
+                try:
+                    state = _load_undo_redo_state()
+                    if not state.get("undo"):
+                        console.print("[dim]Nada para deshacer.[/dim]")
+                        continue
+                    entry = state["undo"].pop()
+                    state.setdefault("redo", []).append(entry)
+                    _save_undo_redo_state(state)
+                    tokens = entry.get("rollback_tokens") or []
+                    tokens_str = ",".join(tokens)
+                    if not tokens_str:
+                        console.print("[dim]El último undo no tiene tokens de rollback guardados.[/dim]")
+                        continue
+                    if DRY_RUN:
+                        console.print("[dim]DRY_RUN activo; no ejecuto undo.[/dim]")
+                        continue
+                    rb_res = rollback_tokens(tokens_str, overwrite=True)
+                    console.print(f"\n[bold purple]Undo:[/bold purple] {rb_res}")
+                    _speak("Deshecho el último cambio.")
+                except Exception as e:
+                    console.print(f"[bold red]Error en undo:[/bold red] {e}")
+                continue
+
+            if low in ("redo last", "redo último", "redo ultimo"):
+                try:
+                    state = _load_undo_redo_state()
+                    if not state.get("redo"):
+                        console.print("[dim]Nada para rehacer.[/dim]")
+                        continue
+                    entry = state["redo"].pop()
+                    state.setdefault("undo", []).append(entry)
+                    _save_undo_redo_state(state)
+                    tool_calls = entry.get("tool_calls") or []
+                    if not tool_calls:
+                        console.print("[dim]El último redo no tiene tool_calls guardados.[/dim]")
+                        continue
+                    if DRY_RUN:
+                        console.print("[dim]DRY_RUN activo; no ejecuto redo.[/dim]")
+                        continue
+                    console.print(f"\n[bold purple]Redo ejecutando {len(tool_calls)} tools:[/bold purple]")
+                    for tc in tool_calls:
+                        name = tc.get("name") or ""
+                        args = tc.get("arguments") or {}
+                        if name and name in tool_map:
+                            if name == "delete_path" and bool(args.get("recursive")):
+                                args["confirm"] = True
+                            if name in ("apply_unified_patch", "install_packages", "service_restart", "service_restart_with_deps"):
+                                if "confirm" in args and not args.get("confirm"):
+                                    args["confirm"] = True
+                            func = tool_map[name]
+                            res = func(**args)
+                            console.print(f"[dim green]✓ {name}[/dim green] {str(res)[:200]}")
+                except Exception as e:
+                    console.print(f"[bold red]Error en redo:[/bold red] {e}")
+                continue
+
+            if low in ("history last", "history ultimo", "historial ultimo"):
+                try:
+                    if not os.path.isfile(log_path):
+                        console.print("[dim]No hay logs.[/dim]")
+                        continue
+                    lines = []
+                    with open(log_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            lines.append(line)
+                    for line in lines[-10:]:
+                        obj = json.loads(line)
+                        ts = obj.get("ts")
+                        user = obj.get("user")
+                        tool_names = [tc.get("name") for tc in (obj.get("tool_calls") or [])]
+                        active_count = obj.get("active_tools_count", "?")
+                        console.print(f"- {ts} | {user} | tools={tool_names} | activas={active_count}")
+                except Exception as e:
+                    console.print(f"[bold red]Error en history:[/bold red] {e}")
+                continue
+
+            if low.startswith("history search "):
+                term = user_input[len("history search "):].strip()
+                if not term:
+                    console.print("[dim]Uso: history search <texto>[/dim]")
+                    continue
+                try:
+                    if not os.path.isfile(log_path):
+                        console.print("[dim]No hay logs.[/dim]")
+                        continue
+                    matches = 0
+                    with open(log_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            if term.lower() in line.lower():
+                                matches += 1
+                                if matches <= 10:
+                                    obj = json.loads(line)
+                                    console.print(f"- {obj.get('ts')} | {obj.get('user')} | tools={[tc.get('name') for tc in (obj.get('tool_calls') or [])]}")
+                    if matches == 0:
+                        console.print("[dim]Sin coincidencias.[/dim]")
+                except Exception as e:
+                    console.print(f"[bold red]Error en history search:[/bold red] {e}")
+                continue
+
+            if low in ("capabilities", "cap", "capacidades"):
+                console.print("[bold purple]Capabilities:[/bold purple]")
+                console.print(f"- JARVIS_DRY_RUN={DRY_RUN}")
+                console.print(f"- JARVIS_PLAN_MODE={PLAN_MODE}")
+                console.print(f"- JARVIS_READ_ONLY={os.environ.get('JARVIS_READ_ONLY', 'false')}")
+                console.print(f"- JARVIS_USE_TRASH={os.environ.get('JARVIS_USE_TRASH', 'true')}")
+                console.print(f"- JARVIS_INPUT_MODE={effective_input}")
+                console.print(f"- JARVIS_VOICE_OUTPUT={VOICE_OUTPUT}")
+                console.print(f"- Tools disponibles={len(available_tools)}")
+                console.print(f"- BACKUP_MAX_AGE_DAYS={BACKUP_MAX_AGE_DAYS}")
+                continue
+
+            if low in ("workspace show", "workspace", "ver workspace"):
+                prefs = memory.get("preferences") or {}
+                ws_root = prefs.get("workspace_root") if isinstance(prefs, dict) else None
+                console.print(f"[bold purple]Workspace:[/bold purple] cwd={os.getcwd()}\nworkspace_root={ws_root or '(no configurado)'}")
+                continue
+
+            if low.startswith("set workspace "):
+                raw = user_input[len("set workspace "):].strip()
+                resolved_ws = resolve_path(raw, must_exist=True)
+                if str(resolved_ws).startswith("Error:"):
+                    console.print(f"[bold red]Error:[/bold red] {resolved_ws}")
+                    continue
+                if not isinstance(memory.get("preferences"), dict):
+                    memory["preferences"] = {}
+                memory["preferences"]["workspace_root"] = resolved_ws
+                _save_memory(memory_path, memory)
+                os.chdir(resolved_ws)
+                messages = _build_prefix_messages(memory)
+                console.print(f"[dim]Workspace fijado: {resolved_ws}[/dim]")
+                _speak(f"Workspace configurado.")
+                continue
+
+            if low in ("reset workspace", "clear workspace", "unset workspace"):
+                if isinstance(memory.get("preferences"), dict):
+                    memory["preferences"].pop("workspace_root", None)
+                    _save_memory(memory_path, memory)
+                os.chdir(str(Path.home()))
+                messages = _build_prefix_messages(memory)
+                console.print("[dim]Workspace eliminado. Vuelves a tu home.[/dim]")
+                continue
+
+            if low in ("rollback last", "undo last", "deshacer last", "rollback último", "undo último"):
+                try:
+                    if not os.path.isfile(log_path):
+                        console.print("[dim]No hay logs para rollback todavía.[/dim]")
+                        continue
+                    last_token = None
+                    with open(log_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            try:
+                                obj = json.loads(line)
+                            except Exception:
+                                continue
+                            for tc in (obj.get("tool_calls") or []):
+                                rp = tc.get("result_preview") or ""
+                                if "ROLLBACK_TOKEN=" in rp:
+                                    m = re.search(r"ROLLBACK_TOKEN=([a-fA-F0-9]+)", rp)
+                                    if m:
+                                        last_token = m.group(1)
+                                if "ROLLBACK_TOKENS=" in rp:
+                                    m2 = re.search(r"ROLLBACK_TOKENS=([a-zA-Z0-9,-]+)", rp)
+                                    if m2:
+                                        parts = [x for x in m2.group(1).split(",") if x.strip()]
+                                        if parts:
+                                            last_token = parts[-1]
+                    if not last_token:
+                        console.print("[dim]No encontré tokens de rollback en el último log.[/dim]")
+                        continue
+                    ans_overwrite = Prompt.ask("Si el destino existe, ¿lo sobreescribo? (s/N)", default="N").strip().lower()
+                    overwrite = ans_overwrite in ("s", "si", "sí", "y", "yes")
+                    res = rollback(last_token, overwrite=overwrite)
+                    console.print(f"\n[bold purple]Rollback:[/bold purple] {res}")
+                    continue
+                except Exception as e:
+                    console.print(f"[bold red]Error en rollback:[/bold red] {e}")
+                    continue
+
+            if low.startswith("rollback "):
+                token = low.split(" ", 1)[1].strip()
+                if token:
+                    ans_overwrite = Prompt.ask("¿Sobreescribir si existe? (s/N)", default="N").strip().lower()
+                    overwrite = ans_overwrite in ("s", "si", "sí", "y", "yes")
+                    res = rollback(token, overwrite=overwrite)
+                    console.print(f"\n[bold purple]Rollback:[/bold purple] {res}")
+                continue
+
+            if low in ("replay ultimo", "replay last", "replay último", "replay"):
+                last_line = None
+                try:
+                    if os.path.isfile(log_path):
+                        with open(log_path, "r", encoding="utf-8") as f:
+                            for line in f:
+                                last_line = line
+                    if not last_line:
+                        console.print("[dim]No hay logs para reproducir todavía.[/dim]")
+                        continue
+                    last_log = json.loads(last_line)
+                    tool_calls = last_log.get("tool_calls") or []
+                    if not tool_calls:
+                        console.print("[dim]El último log no tiene tool_calls.[/dim]")
+                        continue
+                    console.print(f"\n[bold]Replaying último (tool_calls={len(tool_calls)})[/bold]")
+                    if DRY_RUN:
+                        console.print("[dim]DRY_RUN está activo; no ejecuto durante replay.[/dim]")
+                        for tc in tool_calls:
+                            console.print(f"- {tc.get('name')}: {tc.get('arguments')}")
+                        continue
+                    ans = Prompt.ask("¿Ejecutar exactamente esas herramientas? (s/N)", default="N").strip().lower()
+                    if ans not in ("s", "si", "sí", "y", "yes"):
+                        console.print("[dim]Replay cancelado.[/dim]")
+                        continue
+                    for tc in tool_calls:
+                        name = tc.get("name") or ""
+                        args = tc.get("arguments") or {}
+                        if name and name in tool_map:
+                            if name == "delete_path" and bool(args.get("recursive")) and not args.get("confirm"):
+                                args["confirm"] = True
+                            func = tool_map[name]
+                            res = func(**args)
+                            console.print(f"[dim green]✓ {name}[/dim green] {res[:300]}")
+                        else:
+                            console.print(f"[dim red]Herramienta desconocida en log:[/dim red] {name}")
+                    continue
+                except Exception as e:
+                    console.print(f"[bold red]Error en replay:[/bold red] {e}")
+                    continue
+
+            # ----------------------------------------------------------------
+            # Turno principal
+            # ----------------------------------------------------------------
+            plan_info: dict[str, Any] | None = None
+            if PLAN_MODE in ("auto", "confirm"):
+                plan_info = _plan_turn(user_input, messages, opts)
+                if plan_info.get("requires_tools"):
+                    console.print("\n[bold]Plan:[/bold]")
+                    if plan_info.get("summary"):
+                        console.print(Markdown(str(plan_info.get("summary"))))
+                    for step in plan_info.get("steps") or []:
+                        console.print(f"- {step}")
+                    for note in plan_info.get("safety_notes") or []:
+                        console.print(f"[dim]Seguridad: {note}[/dim]")
+                    if PLAN_MODE == "confirm":
+                        ans = Prompt.ask("¿Ejecutar ahora? (s/N)", default="N").strip().lower()
+                        if ans not in ("s", "si", "sí", "y", "yes"):
+                            console.print("[dim]Ejecución cancelada. Te dejo el plan listo.[/dim]")
+                            continue
+
+            if plan_info and plan_info.get("requires_tools"):
+                steps = plan_info.get("steps") or []
+                summary = plan_info.get("summary") or ""
+                steps_text = "\n".join([f"{i+1}. {s}" for i, s in enumerate(steps[:8])]) if steps else "(sin pasos explícitos)"
+                messages.append({
+                    "role": "system",
+                    "content": "Eres el worker. Sigue el plan descrito para cumplir la tarea. "
+                    f"Resumen del plan: {summary}\nPasos:\n{steps_text}\n"
+                    "Usa herramientas solo para ejecutar acciones del plan y detente cuando el plan esté completo; "
+                    "si falta algo del plan, pide aclaración.",
+                })
+
+            turn_start_idx = len(messages)
+            messages.append({"role": "user", "content": user_input})
+
+            # Selección dinámica de herramientas
+            active_tools = _select_tools(user_input, available_tools, tool_groups)
+            console.print(f"[dim]Tools activas: {len(active_tools)}/{len(available_tools)}[/dim]")
+
+            if _is_simple_conversational(user_input) and PLAN_MODE == "off":
+                reply_content = _run_simple_chat_streaming(messages, opts)
+                messages.append({"role": "assistant", "content": reply_content})
+                turn_tool_ms = 0
+            else:
+                turn_tool_start = datetime.now().timestamp()
+                reply_content = _run_tool_loop(messages, active_tools, tool_map, opts)
+                turn_tool_ms = int((datetime.now().timestamp() - turn_tool_start) * 1000)
+                if reply_content.strip():
+                    console.print("\n[bold purple]JARVIS:[/bold purple]")
+                    console.print(Markdown(reply_content))
+                    # Hablar la respuesta
+                    _speak(reply_content)
+
+            # Log
+            tool_calls_log: list = []
+            try:
+                tool_calls_extracted: list[dict[str, Any]] = []
+                tool_results: list[str] = []
+                for m in messages[turn_start_idx:]:
+                    if m.get("role") == "assistant" and m.get("tool_calls"):
+                        for tc in m.get("tool_calls") or []:
+                            fn = (tc.get("function") or {})
+                            name = fn.get("name") or ""
+                            args = _normalize_tool_arguments(fn.get("arguments"))
+                            if name:
+                                tool_calls_extracted.append({"name": name, "arguments": args})
+                    if m.get("role") == "tool":
+                        tool_results.append(m.get("content") or "")
+
+                tool_calls_log = []
+                for i, tc in enumerate(tool_calls_extracted):
+                    res_preview = tool_results[i][:800] if i < len(tool_results) else ""
+                    tool_calls_log.append({"name": tc["name"], "arguments": tc["arguments"], "result_preview": res_preview})
+
+                log_obj = {
+                    "ts": _now_iso(),
+                    "user": user_input,
+                    "plan_mode": PLAN_MODE,
+                    "plan": plan_info,
+                    "tool_calls": tool_calls_log,
+                    "tool_call_count": len(tool_calls_log),
+                    "active_tools_count": len(active_tools),
+                    "tool_loop_ms": turn_tool_ms,
+                    "assistant_preview": reply_content[:1200],
+                }
+                os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(log_obj, ensure_ascii=False) + "\n")
+
+                try:
+                    tokens_found: list[str] = []
+                    for tr in tool_results:
+                        if not isinstance(tr, str):
+                            continue
+                        mt = re.findall(r"ROLLBACK_TOKEN=([a-fA-F0-9]+)", tr)
+                        tokens_found.extend(mt)
+                        mt2 = re.findall(r"ROLLBACK_TOKENS=([a-zA-Z0-9,-]+)", tr)
+                        for group in mt2:
+                            tokens_found.extend([x for x in group.split(",") if x.strip()])
+                    tokens_found = [t for t in tokens_found if t]
+                    if tokens_found and tool_calls_log:
+                        state = _load_undo_redo_state()
+                        state.setdefault("undo", []).append({
+                            "ts": log_obj.get("ts"),
+                            "tool_calls": tool_calls_log,
+                            "rollback_tokens": list(dict.fromkeys(tokens_found))[-50:],
+                        })
+                        state["redo"] = []
+                        _save_undo_redo_state(state)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            messages = _prune_messages(messages, keep_last=MAX_CONTEXT_MESSAGES)
+
+            _turn_counter += 1
+            if _turn_counter % MEMORY_UPDATE_EVERY == 0 or tool_calls_log:
+                memory = _update_memory(messages, memory, opts)
+                _save_memory(memory_path, memory)
+
+        except KeyboardInterrupt:
+            _speak("Hasta luego.")
+            console.print("\n[bold yellow]Cancelado. Saliendo…[/bold yellow]")
+            break
+        except Exception as e:
+            console.print(f"\n[bold red]Error:[/bold red] {e}")
+            messages.append({"role": "system", "content": f"Error previo (no repetir): {e}"})
+
+
+if __name__ == "__main__":
+    main()
