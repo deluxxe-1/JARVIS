@@ -144,6 +144,86 @@ from agents import (
     read_agent_result,
 )
 
+from hotkey import (
+    start_hotkey_listener,
+    stop_hotkey_listener,
+    get_hotkey_status,
+    change_hotkey,
+)
+
+from clipboard_intel import (
+    analyze_clipboard,
+    smart_clipboard_action,
+)
+
+from briefing import (
+    daily_briefing,
+    quick_status,
+)
+
+from network import (
+    scan_network,
+    ping_host,
+    scan_ports,
+    check_internet,
+)
+
+from media import (
+    media_play_pause,
+    media_next,
+    media_previous,
+    media_stop,
+    now_playing,
+)
+
+from organizer import (
+    organize_folder,
+    find_duplicates,
+    clean_old_files,
+    folder_stats,
+)
+
+from git_tools import (
+    git_status,
+    git_diff,
+    git_smart_commit,
+    git_log,
+    git_branch,
+    git_describe_pr,
+)
+
+from guard import (
+    start_guard,
+    stop_guard,
+    guard_status,
+    set_guard_threshold,
+    guard_alerts_history,
+)
+
+from knowledge import (
+    save_note,
+    save_bookmark,
+    save_snippet,
+    search_knowledge,
+    delete_knowledge,
+    list_knowledge_tags,
+)
+
+from windows import (
+    list_windows,
+    snap_window,
+    minimize_all,
+    close_window,
+    focus_window,
+)
+
+from scraper import (
+    scrape_text,
+    scrape_links,
+    scrape_images,
+    monitor_price,
+)
+
 console = Console()
 
 MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
@@ -238,6 +318,47 @@ def _build_tool_groups(available_tools: list) -> dict[str, list]:
         "intelligence": _pick(
             "screen_ocr", "image_ocr", "extract_document_text",
             "summarize_document", "semantic_search", "index_directory",
+        ),
+        "hotkey": _pick(
+            "start_hotkey_listener", "stop_hotkey_listener",
+            "get_hotkey_status", "change_hotkey",
+        ),
+        "clipboard_intel": _pick(
+            "analyze_clipboard", "smart_clipboard_action",
+        ),
+        "briefing": _pick(
+            "daily_briefing", "quick_status",
+        ),
+        "network": _pick(
+            "scan_network", "ping_host", "scan_ports", "check_internet",
+        ),
+        "media": _pick(
+            "media_play_pause", "media_next", "media_previous",
+            "media_stop", "now_playing",
+        ),
+        "organizer": _pick(
+            "organize_folder", "find_duplicates", "clean_old_files",
+            "folder_stats",
+        ),
+        "git": _pick(
+            "git_status", "git_diff", "git_smart_commit",
+            "git_log", "git_branch", "git_describe_pr",
+        ),
+        "guard": _pick(
+            "start_guard", "stop_guard", "guard_status",
+            "set_guard_threshold", "guard_alerts_history",
+        ),
+        "knowledge": _pick(
+            "save_note", "save_bookmark", "save_snippet",
+            "search_knowledge", "delete_knowledge", "list_knowledge_tags",
+        ),
+        "wm": _pick(
+            "list_windows", "snap_window", "minimize_all",
+            "close_window", "focus_window",
+        ),
+        "scraper": _pick(
+            "scrape_text", "scrape_links", "scrape_images",
+            "monitor_price",
         ),
     }
 
@@ -359,6 +480,99 @@ def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str,
         "indexar", "indexa", "embeddings",
     ]):
         _add_group("intelligence")
+
+    # Hotkey global
+    if any(k in s for k in [
+        "hotkey", "atajo", "win+j", "tecla rápida", "tecla rapida",
+        "atajo de teclado", "shortcut",
+    ]):
+        _add_group("hotkey")
+
+    # Clipboard intelligence
+    if any(k in s for k in [
+        "portapapeles", "clipboard", "analiza lo copiado", "qué tengo copiado",
+        "que tengo copiado", "lo que copié", "lo que copie",
+    ]):
+        _add_group("clipboard_intel")
+
+    # Daily briefing
+    if any(k in s for k in [
+        "buenos días", "buenos dias", "briefing", "resumen del día",
+        "resumen del dia", "resumen diario", "estado rápido", "estado rapido",
+        "cómo estamos", "como estamos", "good morning",
+    ]):
+        _add_group("briefing")
+
+    # Network
+    if any(k in s for k in [
+        "red", "network", "wifi", "escanear red", "scan network",
+        "dispositivos conectados", "ping", "puertos", "ports",
+        "internet", "conectividad", "latencia",
+    ]):
+        _add_group("network")
+
+    # Media
+    if any(k in s for k in [
+        "música", "musica", "music", "canción", "cancion", "song",
+        "play", "pause", "pausa", "reproduce", "reproducir",
+        "siguiente canción", "siguiente cancion", "next track",
+        "anterior canción", "anterior cancion", "previous",
+        "qué suena", "que suena", "now playing",
+        "detener música", "detener musica", "stop music",
+    ]):
+        _add_group("media")
+
+    # Organizer
+    if any(k in s for k in [
+        "organiza", "organizar", "organize", "ordena", "ordenar",
+        "descargas", "downloads", "clasificar", "clasificar archivos",
+        "duplicados", "duplicates", "archivos duplicados",
+        "limpiar archivos", "clean files", "archivos viejos",
+        "estadísticas carpeta", "estadisticas carpeta", "folder stats",
+    ]):
+        _add_group("organizer")
+
+    # Git
+    if any(k in s for k in [
+        "git", "commit", "push", "pull", "branch", "rama", "merge",
+        "repositorio", "repo", "diff", "cambios", "pull request", "pr",
+        "stash", "log de commits",
+    ]):
+        _add_group("git")
+
+    # Guard (vigía del sistema)
+    if any(k in s for k in [
+        "guard", "vigía", "vigia", "vigilar", "monitor", "monitorizar",
+        "umbral", "threshold", "alertas del sistema", "proteger",
+    ]):
+        _add_group("guard")
+
+    # Knowledge Base
+    if any(k in s for k in [
+        "nota", "note", "apunte", "guarda esto", "recuerda esto",
+        "bookmark", "marcador", "snippet", "fragmento",
+        "base de conocimiento", "knowledge", "mis notas",
+        "busca en mis notas", "tags",
+    ]):
+        _add_group("knowledge")
+
+    # Window Manager
+    if any(k in s for k in [
+        "ventana", "ventanas", "window", "snap", "dividir pantalla",
+        "pantalla dividida", "split screen", "minimiza todo",
+        "muestra escritorio", "pon a la izquierda", "pon a la derecha",
+        "trae al frente", "foco", "focus",
+    ]):
+        _add_group("wm")
+
+    # Scraper
+    if any(k in s for k in [
+        "scrape", "scrapea", "extraer de web", "extraer de la web",
+        "raspar", "descargar imágenes", "descargar imagenes",
+        "links de", "enlaces de", "precio", "monitorizar precio",
+        "precio del producto",
+    ]):
+        _add_group("scraper")
 
     only_files = len(added_names) <= len(tool_groups.get("files", []))
     if only_files and len(s.split()) > 6:
@@ -559,6 +773,68 @@ SYSTEM_PROMPT = """Eres JARVIS, un asistente personal inteligente para Windows. 
 - `extract_document_text`: extrae texto crudo de documentos.
 - `semantic_search`: búsqueda semántica en archivos usando embeddings de Ollama.
 - `index_directory`: indexa un directorio para búsqueda semántica.
+
+## Hotkey Global
+- `start_hotkey_listener` / `stop_hotkey_listener`: activa/desactiva el atajo de teclado global (Win+J por defecto).
+- `get_hotkey_status` / `change_hotkey`: consulta o cambia la combinación de teclas.
+
+## Clipboard Intelligence
+- `analyze_clipboard`: analiza qué tipo de contenido tiene el portapapeles (URL, código, JSON, email, texto) y sugiere acciones.
+- `smart_clipboard_action`: ejecuta acciones inteligentes sobre el portapapeles (format_json, open_urls, translate, save_as).
+
+## Briefing Diario
+- `daily_briefing`: genera resumen matutino con clima, noticias, recordatorios, estado del sistema y crypto.
+- `quick_status`: resumen rápido de una línea (CPU, RAM, recordatorios, agentes).
+
+## Red / Network
+- `scan_network`: escanea la red local y encuentra dispositivos conectados.
+- `ping_host`: hace ping a un host con estadísticas.
+- `scan_ports`: escanea puertos abiertos de un host.
+- `check_internet`: comprueba conectividad a internet y tu IP pública.
+
+## Media / Multimedia
+- `media_play_pause` / `media_next` / `media_previous` / `media_stop`: control de reproducción multimedia del sistema.
+- `now_playing`: detecta qué está reproduciéndose actualmente.
+
+## Organizador de Archivos
+- `organize_folder`: clasifica archivos de una carpeta en subcarpetas por tipo (Documentos, Imágenes, Vídeos, etc.).
+- `find_duplicates`: detecta archivos duplicados por hash MD5.
+- `clean_old_files`: elimina archivos más antiguos de X días (dry_run por defecto).
+- `folder_stats`: muestra estadísticas de distribución de archivos por tipo.
+
+## Git Assistant
+- `git_status`: estado del repo (archivos modificados, staged, untracked).
+- `git_diff`: muestra los cambios (diff) del repo.
+- `git_smart_commit`: commit inteligente con mensaje auto-generado por IA.
+- `git_log`: historial de commits reciente.
+- `git_branch`: listar, crear, cambiar o eliminar ramas.
+- `git_describe_pr`: genera descripción de Pull Request con IA.
+
+## System Guard
+- `start_guard` / `stop_guard`: activa/desactiva el vigía del sistema en background.
+- `guard_status`: estado actual y alertas activas.
+- `set_guard_threshold`: configura umbrales (CPU, RAM, disco, batería).
+- `guard_alerts_history`: historial de alertas pasadas.
+
+## Knowledge Base
+- `save_note`: guarda una nota con auto-tags.
+- `save_bookmark`: guarda un enlace web.
+- `save_snippet`: guarda un fragmento de código.
+- `search_knowledge`: busca en la base de conocimiento por texto, tag o tipo.
+- `delete_knowledge`: elimina una entrada (requiere confirm).
+- `list_knowledge_tags`: lista todos los tags y frecuencias.
+
+## Window Manager
+- `list_windows`: lista ventanas visibles del escritorio.
+- `snap_window`: posiciona una ventana (left, right, top, bottom, maximize, minimize, center).
+- `minimize_all`: minimiza todas las ventanas (muestra escritorio).
+- `close_window` / `focus_window`: cierra o trae al frente una ventana.
+
+## Web Scraper
+- `scrape_text`: extrae el texto principal de una página web.
+- `scrape_links`: extrae todos los enlaces de una página.
+- `scrape_images`: extrae/descarga imágenes de una página.
+- `monitor_price`: extrae precios de productos y compara con un objetivo.
 
 ## Contexto
 Estás en una sesión interactiva en un sistema Windows. El directorio de trabajo del proceso es el cwd del usuario al lanzar el programa. Usa rutas absolutas cuando el usuario las dé, o relativas al cwd actual."""
@@ -1189,6 +1465,36 @@ def main():
         # Intelligence
         screen_ocr, image_ocr, extract_document_text,
         summarize_document, semantic_search, index_directory,
+        # Hotkey
+        start_hotkey_listener, stop_hotkey_listener,
+        get_hotkey_status, change_hotkey,
+        # Clipboard Intel
+        analyze_clipboard, smart_clipboard_action,
+        # Briefing
+        daily_briefing, quick_status,
+        # Network
+        scan_network, ping_host, scan_ports, check_internet,
+        # Media
+        media_play_pause, media_next, media_previous,
+        media_stop, now_playing,
+        # Organizer
+        organize_folder, find_duplicates, clean_old_files,
+        folder_stats,
+        # Git
+        git_status, git_diff, git_smart_commit,
+        git_log, git_branch, git_describe_pr,
+        # Guard
+        start_guard, stop_guard, guard_status,
+        set_guard_threshold, guard_alerts_history,
+        # Knowledge Base
+        save_note, save_bookmark, save_snippet,
+        search_knowledge, delete_knowledge, list_knowledge_tags,
+        # Window Manager
+        list_windows, snap_window, minimize_all,
+        close_window, focus_window,
+        # Scraper
+        scrape_text, scrape_links, scrape_images,
+        monitor_price,
     ]
 
     tool_map = {f.__name__: f for f in available_tools}

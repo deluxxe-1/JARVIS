@@ -13,4 +13,5 @@ pytesseract>=0.3.10
 Pillow>=10.0.0
 PyPDF2>=3.0.0
 python-docx>=1.0.0
+keyboard>=0.13.5
 pytest>=8.0.0
