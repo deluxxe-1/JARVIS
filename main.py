@@ -211,6 +211,8 @@ from knowledge import (
 
 from windows import (
     list_windows,
+    list_monitors,
+    move_to_monitor,
     snap_window,
     minimize_all,
     close_window,
@@ -224,9 +226,22 @@ from scraper import (
     monitor_price,
 )
 
+from obsidian import (
+    obsidian_create_note,
+    obsidian_read_note,
+    obsidian_search,
+    obsidian_list_notes,
+    obsidian_daily_note,
+    obsidian_append_to_note,
+    obsidian_delete_note,
+    obsidian_list_tags,
+    obsidian_recent,
+    migrate_kb_to_obsidian,
+)
+
 console = Console()
 
-MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
+MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:14b")
 MAX_TOOL_ROUNDS = int(os.environ.get("JARVIS_MAX_TOOL_ROUNDS", "12"))
 MAX_CONTEXT_MESSAGES = int(os.environ.get("JARVIS_MAX_CONTEXT_MESSAGES", "20"))
 MEMORY_UPDATE_EVERY = int(os.environ.get("JARVIS_MEMORY_UPDATE_EVERY", "5"))
@@ -353,12 +368,19 @@ def _build_tool_groups(available_tools: list) -> dict[str, list]:
             "search_knowledge", "delete_knowledge", "list_knowledge_tags",
         ),
         "wm": _pick(
-            "list_windows", "snap_window", "minimize_all",
+            "list_windows", "list_monitors", "move_to_monitor",
+            "snap_window", "minimize_all",
             "close_window", "focus_window",
         ),
         "scraper": _pick(
             "scrape_text", "scrape_links", "scrape_images",
             "monitor_price",
+        ),
+        "obsidian": _pick(
+            "obsidian_create_note", "obsidian_read_note", "obsidian_search",
+            "obsidian_list_notes", "obsidian_daily_note", "obsidian_append_to_note",
+            "obsidian_delete_note", "obsidian_list_tags", "obsidian_recent",
+            "migrate_kb_to_obsidian",
         ),
     }
 
@@ -556,12 +578,15 @@ def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str,
     ]):
         _add_group("knowledge")
 
-    # Window Manager
+    # Window Manager + Multi-monitor
     if any(k in s for k in [
         "ventana", "ventanas", "window", "snap", "dividir pantalla",
         "pantalla dividida", "split screen", "minimiza todo",
         "muestra escritorio", "pon a la izquierda", "pon a la derecha",
         "trae al frente", "foco", "focus",
+        "monitor", "monitores", "pantalla 2", "pantalla 1",
+        "segundo monitor", "otra pantalla", "mover al monitor",
+        "mueve al monitor", "pon en el monitor", "display",
     ]):
         _add_group("wm")
 
@@ -573,6 +598,15 @@ def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str,
         "precio del producto",
     ]):
         _add_group("scraper")
+
+    # Obsidian / Vault / Segundo cerebro
+    if any(k in s for k in [
+        "obsidian", "vault", "segundo cerebro", "nota diaria", "daily note",
+        "mis notas", "apuntes", "guarda en obsidian", "crea una nota",
+        "notas de hoy", "nota de hoy", "diario", "journal",
+        "migrar notas", "migrar knowledge",
+    ]):
+        _add_group("obsidian")
 
     only_files = len(added_names) <= len(tool_groups.get("files", []))
     if only_files and len(s.split()) > 6:
@@ -824,17 +858,34 @@ SYSTEM_PROMPT = """Eres JARVIS, un asistente personal inteligente para Windows. 
 - `delete_knowledge`: elimina una entrada (requiere confirm).
 - `list_knowledge_tags`: lista todos los tags y frecuencias.
 
-## Window Manager
-- `list_windows`: lista ventanas visibles del escritorio.
-- `snap_window`: posiciona una ventana (left, right, top, bottom, maximize, minimize, center).
+## Window Manager & Multi-Monitor
+- `list_windows`: lista ventanas visibles del escritorio (incluye en qué monitor está cada una).
+- `list_monitors`: lista todos los monitores conectados con resolución y posición.
+- `move_to_monitor`: mueve una ventana a un monitor específico (ej: `move_to_monitor(title_contains="Zen", monitor=2)`).
+- `snap_window`: posiciona una ventana (left, right, top, bottom, maximize, minimize, center). Acepta `monitor=N` para hacer snap en un monitor específico.
 - `minimize_all`: minimiza todas las ventanas (muestra escritorio).
 - `close_window` / `focus_window`: cierra o trae al frente una ventana.
+- Para mover una ventana al segundo monitor con YouTube: primero usa `open_url` para abrir YouTube, luego `move_to_monitor` con el título del browser.
 
 ## Web Scraper
 - `scrape_text`: extrae el texto principal de una página web.
 - `scrape_links`: extrae todos los enlaces de una página.
 - `scrape_images`: extrae/descarga imágenes de una página.
 - `monitor_price`: extrae precios de productos y compara con un objetivo.
+
+## Obsidian Vault (Segundo Cerebro)
+- `obsidian_create_note`: crea una nota Markdown en el vault con frontmatter YAML (tags, tipo, fecha).
+- `obsidian_read_note`: lee una nota por título o ruta.
+- `obsidian_search`: busca notas por texto, tags o tipo.
+- `obsidian_list_notes`: lista notas del vault (con filtro por carpeta).
+- `obsidian_daily_note`: crea/actualiza la nota diaria (Daily/YYYY-MM-DD.md).
+- `obsidian_append_to_note`: añade contenido al final de una nota existente.
+- `obsidian_delete_note`: elimina una nota (requiere confirm=true).
+- `obsidian_list_tags`: lista todos los tags del vault con frecuencia.
+- `obsidian_recent`: muestra las notas más recientes.
+- `migrate_kb_to_obsidian`: migra las notas del knowledge_base.json al vault.
+- El vault está organizado en carpetas: Notes/, Bookmarks/, Snippets/, Projects/, Daily/.
+- Cuando el usuario diga "guarda esto", "apunta esto", "crea una nota" o "nota diaria", usa las herramientas de Obsidian.
 
 ## Contexto
 Estás en una sesión interactiva en un sistema Windows. El directorio de trabajo del proceso es el cwd del usuario al lanzar el programa. Usa rutas absolutas cuando el usuario las dé, o relativas al cwd actual."""
@@ -1489,12 +1540,18 @@ def main():
         # Knowledge Base
         save_note, save_bookmark, save_snippet,
         search_knowledge, delete_knowledge, list_knowledge_tags,
-        # Window Manager
-        list_windows, snap_window, minimize_all,
+        # Window Manager + Multi-monitor
+        list_windows, list_monitors, move_to_monitor,
+        snap_window, minimize_all,
         close_window, focus_window,
         # Scraper
         scrape_text, scrape_links, scrape_images,
         monitor_price,
+        # Obsidian Vault
+        obsidian_create_note, obsidian_read_note, obsidian_search,
+        obsidian_list_notes, obsidian_daily_note, obsidian_append_to_note,
+        obsidian_delete_note, obsidian_list_tags, obsidian_recent,
+        migrate_kb_to_obsidian,
     ]
 
     tool_map = {f.__name__: f for f in available_tools}

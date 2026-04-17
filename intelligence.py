@@ -25,7 +25,7 @@ _JARVIS_DIR = Path(os.environ.get(
 ))
 
 EMBEDDINGS_CACHE_DIR = _JARVIS_DIR / "embeddings_cache"
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:14b")
 EMBED_MODEL = os.environ.get("JARVIS_EMBED_MODEL", "nomic-embed-text")
 
 

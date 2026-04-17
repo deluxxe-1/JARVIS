@@ -2,6 +2,7 @@
 JARVIS Window Manager Module — Control de ventanas del escritorio.
 
 Permite listar, mover, redimensionar y organizar ventanas abiertas.
+Soporte multi-monitor: detecta monitores, mueve ventanas entre ellos.
 """
 
 import json
@@ -9,6 +10,10 @@ import subprocess
 import sys
 from typing import Optional
 
+
+# ==========================================================================
+# Funciones públicas
+# ==========================================================================
 
 def list_windows() -> str:
     """
@@ -23,9 +28,52 @@ def list_windows() -> str:
         return f"Error en list_windows: {e}"
 
 
+def list_monitors() -> str:
+    """
+    Lista todos los monitores conectados con su resolución, posición y si es primario.
+    Devuelve un array numerado (monitor 1, 2, 3...) con los bounds de cada uno.
+    """
+    try:
+        if sys.platform == "win32":
+            return _list_monitors_win32()
+        else:
+            return json.dumps({
+                "status": "error",
+                "message": "list_monitors solo implementado en Windows."
+            }, ensure_ascii=False)
+    except Exception as e:
+        return f"Error en list_monitors: {e}"
+
+
+def move_to_monitor(
+    title_contains: str,
+    monitor: int = 2,
+    maximize: bool = True,
+) -> str:
+    """
+    Mueve una ventana a un monitor específico.
+
+    Args:
+        title_contains: Parte del título de la ventana a mover.
+        monitor: Número del monitor destino (1=primario, 2=secundario, etc.).
+        maximize: Si True, maximiza la ventana en el monitor destino.
+    """
+    try:
+        if sys.platform == "win32":
+            return _move_to_monitor_win32(title_contains, monitor, maximize)
+        else:
+            return json.dumps({
+                "status": "error",
+                "message": "move_to_monitor solo implementado en Windows."
+            }, ensure_ascii=False)
+    except Exception as e:
+        return f"Error en move_to_monitor: {e}"
+
+
 def snap_window(
     title_contains: str,
     position: str = "left",
+    monitor: int = 0,
 ) -> str:
     """
     Posiciona una ventana en una zona del escritorio (snap).
@@ -34,10 +82,11 @@ def snap_window(
         title_contains: Parte del título de la ventana a mover.
         position: Posición: 'left', 'right', 'top', 'bottom', 'maximize', 'minimize',
                   'top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'.
+        monitor: Número del monitor (1, 2, 3...). Si 0, usa el monitor donde está la ventana actualmente.
     """
     try:
         if sys.platform == "win32":
-            return _snap_window_win32(title_contains, position)
+            return _snap_window_win32(title_contains, position, monitor)
         else:
             return _snap_window_linux(title_contains, position)
     except Exception as e:
@@ -105,7 +154,152 @@ def focus_window(title_contains: str) -> str:
 
 
 # ==========================================================================
-# Windows implementations
+# Windows implementations — Multi-monitor
+# ==========================================================================
+
+def _get_monitors_win32() -> list[dict]:
+    """Enumera todos los monitores con ctypes (EnumDisplayMonitors)."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    monitors = []
+
+    MONITORENUMPROC = ctypes.WINFUNCTYPE(
+        wintypes.BOOL,
+        wintypes.HMONITOR,
+        wintypes.HDC,
+        ctypes.POINTER(wintypes.RECT),
+        wintypes.LPARAM,
+    )
+
+    class MONITORINFOEXW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("rcMonitor", wintypes.RECT),
+            ("rcWork", wintypes.RECT),
+            ("dwFlags", wintypes.DWORD),
+            ("szDevice", wintypes.WCHAR * 32),
+        ]
+
+    MONITORINFOF_PRIMARY = 0x00000001
+
+    def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+        info = MONITORINFOEXW()
+        info.cbSize = ctypes.sizeof(MONITORINFOEXW)
+        user32.GetMonitorInfoW(hMonitor, ctypes.byref(info))
+
+        rc = info.rcMonitor
+        work = info.rcWork
+        monitors.append({
+            "device": info.szDevice,
+            "primary": bool(info.dwFlags & MONITORINFOF_PRIMARY),
+            "x": rc.left,
+            "y": rc.top,
+            "width": rc.right - rc.left,
+            "height": rc.bottom - rc.top,
+            "work_x": work.left,
+            "work_y": work.top,
+            "work_width": work.right - work.left,
+            "work_height": work.bottom - work.top,
+        })
+        return True
+
+    user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(callback), 0)
+
+    # Ordenar: primario primero, luego por posición X
+    monitors.sort(key=lambda m: (not m["primary"], m["x"]))
+
+    # Añadir número (1-indexed)
+    for i, m in enumerate(monitors):
+        m["number"] = i + 1
+
+    return monitors
+
+
+def _list_monitors_win32() -> str:
+    monitors = _get_monitors_win32()
+    # Limpiar campos internos para la salida
+    output = []
+    for m in monitors:
+        output.append({
+            "monitor": m["number"],
+            "device": m["device"],
+            "primary": m["primary"],
+            "resolution": f"{m['width']}x{m['height']}",
+            "position": {"x": m["x"], "y": m["y"]},
+            "work_area": {
+                "x": m["work_x"], "y": m["work_y"],
+                "width": m["work_width"], "height": m["work_height"],
+            },
+        })
+    return json.dumps({
+        "status": "ok",
+        "monitors": output,
+        "count": len(output),
+    }, ensure_ascii=False)
+
+
+def _move_to_monitor_win32(title_contains: str, monitor: int, maximize: bool) -> str:
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    hwnd = _find_window_win32(title_contains)
+    if not hwnd:
+        return f"Error: no se encontró ventana con '{title_contains}'."
+
+    monitors = _get_monitors_win32()
+    if not monitors:
+        return "Error: no se detectaron monitores."
+
+    if monitor < 1 or monitor > len(monitors):
+        names = ", ".join(
+            f"{m['number']} ({'primario' if m['primary'] else m['device']})"
+            for m in monitors
+        )
+        return f"Error: monitor {monitor} no existe. Monitores disponibles: {names}"
+
+    target = monitors[monitor - 1]
+    SWP_NOZORDER = 0x0004
+    SW_RESTORE = 9
+    SW_MAXIMIZE = 3
+
+    # Restaurar si está maximizada (necesario para moverla)
+    user32.ShowWindow(hwnd, SW_RESTORE)
+
+    if maximize:
+        # Mover al centro del monitor destino, luego maximizar
+        cx = target["work_x"] + target["work_width"] // 4
+        cy = target["work_y"] + target["work_height"] // 4
+        w = target["work_width"] // 2
+        h = target["work_height"] // 2
+        user32.SetWindowPos(hwnd, None, cx, cy, w, h, SWP_NOZORDER)
+        user32.ShowWindow(hwnd, SW_MAXIMIZE)
+    else:
+        # Mover centrada en el monitor destino
+        w = min(1024, target["work_width"])
+        h = min(768, target["work_height"])
+        cx = target["work_x"] + (target["work_width"] - w) // 2
+        cy = target["work_y"] + (target["work_height"] - h) // 2
+        user32.SetWindowPos(hwnd, None, cx, cy, w, h, SWP_NOZORDER)
+
+    # Traer al frente
+    user32.SetForegroundWindow(hwnd)
+
+    return json.dumps({
+        "status": "ok",
+        "message": f"Ventana '{title_contains}' movida al monitor {monitor}.",
+        "monitor": {
+            "number": target["number"],
+            "device": target["device"],
+            "resolution": f"{target['width']}x{target['height']}",
+        },
+        "maximized": maximize,
+    }, ensure_ascii=False)
+
+
+# ==========================================================================
+# Windows implementations — Core
 # ==========================================================================
 
 def _list_windows_win32() -> str:
@@ -113,6 +307,7 @@ def _list_windows_win32() -> str:
     from ctypes import wintypes
 
     user32 = ctypes.windll.user32
+    monitors = _get_monitors_win32()
     windows = []
 
     WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -127,11 +322,21 @@ def _list_windows_win32() -> str:
                 if title.strip():
                     rect = wintypes.RECT()
                     user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                    # Detectar en qué monitor está
+                    win_cx = (rect.left + rect.right) // 2
+                    win_cy = (rect.top + rect.bottom) // 2
+                    mon_num = 1
+                    for m in monitors:
+                        if (m["x"] <= win_cx < m["x"] + m["width"]
+                                and m["y"] <= win_cy < m["y"] + m["height"]):
+                            mon_num = m["number"]
+                            break
                     windows.append({
                         "title": title,
                         "x": rect.left, "y": rect.top,
                         "width": rect.right - rect.left,
                         "height": rect.bottom - rect.top,
+                        "monitor": mon_num,
                         "hwnd": hwnd,
                     })
         return True
@@ -149,7 +354,7 @@ def _list_windows_win32() -> str:
     return json.dumps({"status": "ok", "windows": filtered, "count": len(filtered)}, ensure_ascii=False)
 
 
-def _snap_window_win32(title_contains: str, position: str) -> str:
+def _snap_window_win32(title_contains: str, position: str, monitor: int = 0) -> str:
     import ctypes
     from ctypes import wintypes
 
@@ -158,9 +363,30 @@ def _snap_window_win32(title_contains: str, position: str) -> str:
     if not hwnd:
         return f"Error: no se encontró ventana con '{title_contains}'."
 
-    # Obtener resolución de pantalla
-    screen_w = user32.GetSystemMetrics(0)
-    screen_h = user32.GetSystemMetrics(1)
+    # Determinar monitor objetivo
+    monitors = _get_monitors_win32()
+    if monitor > 0:
+        if monitor > len(monitors):
+            return f"Error: monitor {monitor} no existe. Hay {len(monitors)} monitores."
+        target = monitors[monitor - 1]
+    else:
+        # Usar el monitor donde está la ventana actualmente
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        win_cx = (rect.left + rect.right) // 2
+        win_cy = (rect.top + rect.bottom) // 2
+        target = monitors[0]  # fallback al primario
+        for m in monitors:
+            if (m["x"] <= win_cx < m["x"] + m["width"]
+                    and m["y"] <= win_cy < m["y"] + m["height"]):
+                target = m
+                break
+
+    # Usar work area del monitor objetivo (excluye la barra de tareas)
+    sx = target["work_x"]
+    sy = target["work_y"]
+    screen_w = target["work_width"]
+    screen_h = target["work_height"]
 
     SWP_NOZORDER = 0x0004
     SW_RESTORE = 9
@@ -171,29 +397,37 @@ def _snap_window_win32(title_contains: str, position: str) -> str:
     user32.ShowWindow(hwnd, SW_RESTORE)
 
     positions = {
-        "left":         (0, 0, screen_w // 2, screen_h),
-        "right":        (screen_w // 2, 0, screen_w // 2, screen_h),
-        "top":          (0, 0, screen_w, screen_h // 2),
-        "bottom":       (0, screen_h // 2, screen_w, screen_h // 2),
-        "top-left":     (0, 0, screen_w // 2, screen_h // 2),
-        "top-right":    (screen_w // 2, 0, screen_w // 2, screen_h // 2),
-        "bottom-left":  (0, screen_h // 2, screen_w // 2, screen_h // 2),
-        "bottom-right": (screen_w // 2, screen_h // 2, screen_w // 2, screen_h // 2),
-        "center":       (screen_w // 4, screen_h // 4, screen_w // 2, screen_h // 2),
+        "left":         (sx, sy, screen_w // 2, screen_h),
+        "right":        (sx + screen_w // 2, sy, screen_w // 2, screen_h),
+        "top":          (sx, sy, screen_w, screen_h // 2),
+        "bottom":       (sx, sy + screen_h // 2, screen_w, screen_h // 2),
+        "top-left":     (sx, sy, screen_w // 2, screen_h // 2),
+        "top-right":    (sx + screen_w // 2, sy, screen_w // 2, screen_h // 2),
+        "bottom-left":  (sx, sy + screen_h // 2, screen_w // 2, screen_h // 2),
+        "bottom-right": (sx + screen_w // 2, sy + screen_h // 2, screen_w // 2, screen_h // 2),
+        "center":       (sx + screen_w // 4, sy + screen_h // 4, screen_w // 2, screen_h // 2),
     }
 
     pos = position.strip().lower()
 
     if pos == "maximize":
+        # Mover al monitor objetivo primero, luego maximizar
+        cx = sx + screen_w // 4
+        cy = sy + screen_h // 4
+        user32.SetWindowPos(hwnd, None, cx, cy, screen_w // 2, screen_h // 2, SWP_NOZORDER)
         user32.ShowWindow(hwnd, SW_MAXIMIZE)
-        return json.dumps({"status": "ok", "action": "maximize"}, ensure_ascii=False)
+        return json.dumps({"status": "ok", "action": "maximize", "monitor": target["number"]}, ensure_ascii=False)
     elif pos == "minimize":
         user32.ShowWindow(hwnd, SW_MINIMIZE)
         return json.dumps({"status": "ok", "action": "minimize"}, ensure_ascii=False)
     elif pos in positions:
         x, y, w, h = positions[pos]
         user32.SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER)
-        return json.dumps({"status": "ok", "position": pos, "rect": {"x": x, "y": y, "w": w, "h": h}}, ensure_ascii=False)
+        return json.dumps({
+            "status": "ok", "position": pos,
+            "monitor": target["number"],
+            "rect": {"x": x, "y": y, "w": w, "h": h},
+        }, ensure_ascii=False)
     else:
         return f"Error: posición '{pos}' no válida. Usa: {', '.join(list(positions.keys()) + ['maximize', 'minimize'])}"
 

@@ -158,7 +158,7 @@ def git_smart_commit(
             try:
                 from ollama import chat
                 response = chat(
-                    model=os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"),
+                    model=os.environ.get("OLLAMA_MODEL", "qwen2.5:14b"),
                     messages=[{
                         "role": "user",
                         "content": (
@@ -311,7 +311,7 @@ def git_describe_pr(path: Optional[str] = None, base: str = "main") -> str:
         try:
             from ollama import chat
             response = chat(
-                model=os.environ.get("OLLAMA_MODEL", "qwen2.5:7b"),
+                model=os.environ.get("OLLAMA_MODEL", "qwen2.5:14b"),
                 messages=[{
                     "role": "user",
                     "content": (
