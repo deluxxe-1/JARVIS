@@ -1,126 +1,115 @@
 """
-JARVIS Hotkey Module — Atajo de teclado global (Win+J).
+JARVIS Voice Wake Word Listener — Escucha continua por micrófono.
 
-Permite invocar a JARVIS desde cualquier aplicación sin necesidad
-de tener la terminal enfocada. Al pulsar la combinación de teclas,
-se activa el micrófono o se muestra un prompt de texto según la config.
+Escucha constantemente el micrófono en segundo plano. Cuando detecta
+la wake word "JARVIS", captura el comando de voz y ejecuta el callback.
 """
 
 import os
 import threading
-from typing import Optional, Callable
-
+import json
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Configuración
 # ---------------------------------------------------------------------------
 
-HOTKEY_COMBO = os.environ.get("JARVIS_HOTKEY", "win+j")
-_hotkey_active = threading.Event()
-_hotkey_thread: Optional[threading.Thread] = None
-_hotkey_callback: Optional[Callable] = None
+WAKE_WORD = os.environ.get("JARVIS_WAKE_WORD", "jarvis").lower()
+_listener_active = threading.Event()
+_listener_thread: Optional[threading.Thread] = None
+_listener_callback = None
 
 
-def start_hotkey_listener() -> str:
+def set_voice_callback(callback) -> None:
+    """Configura el callback que se ejecuta cuando se detecta un comando de voz."""
+    global _listener_callback
+    _listener_callback = callback
+
+
+def start_voice_listener() -> str:
     """
-    Inicia el listener de hotkey global en segundo plano.
-    Cuando se detecta la combinación (por defecto Win+J), ejecuta el callback por defecto.
+    Inicia el listener de voz continuo en segundo plano.
+    Cuando detecta la wake word (por defecto "JARVIS"), ejecuta el callback
+    configurado con set_voice_callback(), o muestra una notificación por defecto.
     """
-    global _hotkey_thread, _hotkey_callback
+    global _listener_thread
 
-    try:
-        import keyboard
-    except ImportError:
-        return (
-            "Error: librería 'keyboard' no instalada. Ejecuta: pip install keyboard\n"
-            "Nota: en Linux requiere ejecutar como root."
-        )
+    if _listener_thread is not None and _listener_thread.is_alive():
+        return f"El listener de voz ya está activo (wake word: '{WAKE_WORD}')."
 
-    if _hotkey_thread is not None and _hotkey_thread.is_alive():
-        return f"El listener de hotkey ya está activo (combo: {HOTKEY_COMBO})."
-
-    _hotkey_callback = None
-
-    def _default_callback():
+    def _default_callback(command: str):
         """Callback por defecto: muestra notificación."""
         try:
             from automation import show_notification
             show_notification(
                 title="🎤 JARVIS Activado",
-                message="Di tu comando o escribe en la terminal.",
+                message=f"Comando detectado: {command}",
                 timeout=5,
             )
         except Exception:
-            pass
+            print(f"[VoiceListener] Comando detectado: {command}")
 
     def _listener():
-        """Hilo que escucha el hotkey."""
+        """Hilo que escucha continuamente el micrófono."""
         try:
-            import keyboard
-            cb = _hotkey_callback or _default_callback
-            keyboard.add_hotkey(HOTKEY_COMBO, cb, suppress=False)
-            _hotkey_active.set()
-            keyboard.wait()  # bloquea hasta keyboard.unhook_all()
-        except Exception:
-            pass
+            from voice import create_listener
+            listener = create_listener()
+
+            if not listener.is_available():
+                print("[VoiceListener] No hay micrófono disponible.")
+                return
+
+            print(f"[VoiceListener] Escuchando wake word '{WAKE_WORD}'...")
+            _listener_active.set()
+
+            cb = _listener_callback or _default_callback
+
+            while _listener_active.is_set():
+                try:
+                    command = listener.listen_for_wake_word(WAKE_WORD)
+                    if command and _listener_active.is_set():
+                        print(f"[VoiceListener] Comando: {command}")
+                        try:
+                            cb(command)
+                        except Exception as e:
+                            print(f"[VoiceListener] Error en callback: {e}")
+                except Exception as e:
+                    # Timeout, no speech detected, etc — continuar escuchando
+                    pass
+
+        except ImportError as e:
+            print(f"[VoiceListener] Dependencia faltante: {e}")
+            print("[VoiceListener] Instala: pip install speechrecognition pyttsx3")
+        except Exception as e:
+            print(f"[VoiceListener] Error: {e}")
         finally:
-            _hotkey_active.clear()
+            _listener_active.clear()
 
-    _hotkey_thread = threading.Thread(
-        target=_listener, daemon=True, name="jarvis-hotkey"
+    _listener_thread = threading.Thread(
+        target=_listener, daemon=True, name="jarvis-voice-listener"
     )
-    _hotkey_thread.start()
+    _listener_thread.start()
 
-    return f"Hotkey global '{HOTKEY_COMBO}' activado. Pulsa {HOTKEY_COMBO} desde cualquier app."
+    return f"Listener de voz activado. Di '{WAKE_WORD}' seguido de tu comando."
 
 
-def stop_hotkey_listener() -> str:
+def stop_voice_listener() -> str:
     """
-    Detiene el listener de hotkey global.
+    Detiene el listener de voz continuo.
     """
-    global _hotkey_thread
+    global _listener_thread
 
-    try:
-        import keyboard
-        keyboard.unhook_all()
-    except Exception:
-        pass
-
-    _hotkey_active.clear()
-    _hotkey_thread = None
-    return "Hotkey listener detenido."
+    _listener_active.clear()
+    _listener_thread = None
+    return "Listener de voz detenido."
 
 
-def get_hotkey_status() -> str:
+def get_listener_status() -> str:
     """
-    Devuelve el estado actual del listener de hotkey.
+    Devuelve el estado actual del listener de voz.
     """
-    import json
     return json.dumps({
-        "active": _hotkey_active.is_set(),
-        "combo": HOTKEY_COMBO,
+        "active": _listener_active.is_set(),
+        "wake_word": WAKE_WORD,
+        "type": "voice",
     }, ensure_ascii=False)
-
-
-def change_hotkey(new_combo: str) -> str:
-    """
-    Cambia la combinación de hotkey (ej: 'ctrl+shift+j', 'win+k').
-
-    Args:
-        new_combo: Nueva combinación de teclas.
-    """
-    global HOTKEY_COMBO
-
-    if not new_combo or not new_combo.strip():
-        return "Error: combinación vacía."
-
-    was_active = _hotkey_active.is_set()
-    if was_active:
-        stop_hotkey_listener()
-
-    HOTKEY_COMBO = new_combo.strip().lower()
-
-    if was_active:
-        start_hotkey_listener(_hotkey_callback)
-
-    return f"Hotkey cambiado a '{HOTKEY_COMBO}'."

@@ -9,7 +9,6 @@ env/
 
 # Local app data / caches
 .jarvis/
-.aaris/
 
 # Logs / traces
 *.log

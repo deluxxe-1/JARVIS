@@ -139,7 +139,7 @@ SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         module="hotkey",
-        names=("start_hotkey_listener", "stop_hotkey_listener", "get_hotkey_status", "change_hotkey"),
+        names=("start_voice_listener", "stop_voice_listener", "get_listener_status"),
     ),
     ToolSpec(module="clipboard_intel", names=("analyze_clipboard", "smart_clipboard_action")),
     ToolSpec(module="briefing", names=("daily_briefing", "quick_status")),

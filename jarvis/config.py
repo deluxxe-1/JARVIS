@@ -21,7 +21,7 @@ class Settings:
     )
 
     # Tools runtime policies
-    aaris_read_only: bool = os.environ.get("AARIS_READ_ONLY", "false").strip().lower() in (
+    jarvis_read_only: bool = os.environ.get("JARVIS_READ_ONLY", "false").strip().lower() in (
         "1",
         "true",
         "yes",

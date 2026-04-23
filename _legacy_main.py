@@ -81,7 +81,7 @@ from agents import (
     spawn_agent, list_running_agents, kill_agent, read_agent_result,
 )
 from hotkey import (
-    start_hotkey_listener, stop_hotkey_listener, get_hotkey_status, change_hotkey,
+    start_voice_listener, stop_voice_listener, get_listener_status,
 )
 from clipboard_intel import (
     analyze_clipboard, smart_clipboard_action,
@@ -116,34 +116,36 @@ from scraper import (
 from obsidian import (
     obsidian_create_note, obsidian_read_note, obsidian_search, obsidian_list_notes, obsidian_daily_note, obsidian_append_to_note, obsidian_delete_note, obsidian_list_tags, obsidian_recent, migrate_kb_to_obsidian,
 )
+from brain import JarvisBrain
+from jarvis.tools_registry import get_all_tools
 
 console = Console()
 
 MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:14b")
-MAX_TOOL_ROUNDS = int(os.environ.get("AARIS_MAX_TOOL_ROUNDS", "12"))
-MAX_CONTEXT_MESSAGES = int(os.environ.get("AARIS_MAX_CONTEXT_MESSAGES", "20"))
-MEMORY_UPDATE_EVERY = int(os.environ.get("AARIS_MEMORY_UPDATE_EVERY", "5"))
-PLAN_MODE = os.environ.get("AARIS_PLAN_MODE", "off")  # off | auto | confirm
-DRY_RUN = os.environ.get("AARIS_DRY_RUN", "false").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
-PREVIEW_MUTATIONS = os.environ.get("AARIS_PREVIEW_MUTATIONS", "true").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
-PREVIEW_CONFIRM_ALWAYS = os.environ.get("AARIS_PREVIEW_CONFIRM_ALWAYS", "true").strip().lower() in (
+MAX_TOOL_ROUNDS = int(os.environ.get("JARVIS_MAX_TOOL_ROUNDS", "12"))
+MAX_CONTEXT_MESSAGES = int(os.environ.get("JARVIS_MAX_CONTEXT_MESSAGES", "20"))
+MEMORY_UPDATE_EVERY = int(os.environ.get("JARVIS_MEMORY_UPDATE_EVERY", "5"))
+PLAN_MODE = os.environ.get("JARVIS_PLAN_MODE", "off")  # off | auto | confirm
+DRY_RUN = os.environ.get("JARVIS_DRY_RUN", "false").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
+PREVIEW_MUTATIONS = os.environ.get("JARVIS_PREVIEW_MUTATIONS", "true").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
+PREVIEW_CONFIRM_ALWAYS = os.environ.get("JARVIS_PREVIEW_CONFIRM_ALWAYS", "true").strip().lower() in (
     "1", "true", "yes", "si", "sí", "on",
 )
-DIFF_MAX_LINES = int(os.environ.get("AARIS_DIFF_MAX_LINES", "300"))
-BACKUP_MAX_AGE_DAYS = int(os.environ.get("AARIS_BACKUP_MAX_AGE_DAYS", "7"))
+DIFF_MAX_LINES = int(os.environ.get("JARVIS_DIFF_MAX_LINES", "300"))
+BACKUP_MAX_AGE_DAYS = int(os.environ.get("JARVIS_BACKUP_MAX_AGE_DAYS", "7"))
 
 DEFAULT_MEMORY_PATH = os.environ.get(
-    "AARIS_MEMORY_PATH",
-    os.path.join(os.path.expanduser("~"), ".aaris", "memory.json"),
+    "JARVIS_MEMORY_PATH",
+    os.path.join(os.path.expanduser("~"), ".jarvis", "memory.json"),
 )
 
 DEFAULT_LOG_PATH = os.environ.get(
-    "AARIS_LOG_PATH",
-    os.path.join(os.path.expanduser("~"), ".aaris", "agent_log.jsonl"),
+    "JARVIS_LOG_PATH",
+    os.path.join(os.path.expanduser("~"), ".jarvis", "agent_log.jsonl"),
 )
 
-DEFAULT_APP_DIR = os.environ.get("AARIS_APP_DIR", os.path.join(os.getcwd(), ".aaris"))
-UNDO_REDO_PATH = os.environ.get("AARIS_UNDO_REDO_PATH", os.path.join(DEFAULT_APP_DIR, "undo_redo.json"))
+DEFAULT_APP_DIR = os.environ.get("JARVIS_APP_DIR", os.path.join(os.getcwd(), ".jarvis"))
+UNDO_REDO_PATH = os.environ.get("JARVIS_UNDO_REDO_PATH", os.path.join(DEFAULT_APP_DIR, "undo_redo.json"))
 
 
 # ---------------------------------------------------------------------------
@@ -209,8 +211,8 @@ def _build_tool_groups(available_tools: list) -> dict[str, list]:
             "summarize_document", "semantic_search", "index_directory",
         ),
         "hotkey": _pick(
-            "start_hotkey_listener", "stop_hotkey_listener",
-            "get_hotkey_status", "change_hotkey",
+            "start_voice_listener", "stop_voice_listener",
+            "get_listener_status",
         ),
         "clipboard_intel": _pick(
             "analyze_clipboard", "smart_clipboard_action",
@@ -306,7 +308,7 @@ def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str,
         _add_group("productivity")
     if any(k in s for k in ["ocr", "leer pantalla", "texto en pantalla", "resume", "resumir", "documento", "semantic search", "indexar"]):
         _add_group("intelligence")
-    if any(k in s for k in ["hotkey", "atajo", "tecla rápida"]):
+    if any(k in s for k in ["voz", "escuchar", "micrófono", "wake word", "listener"]):
         _add_group("hotkey")
     if any(k in s for k in ["analiza lo copiado", "qué tengo copiado"]):
         _add_group("clipboard_intel")
@@ -339,7 +341,7 @@ def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str,
     intent_docs = any(k in s for k in ["pdf", "docx", "documento", "resume archivo", "resumir archivo", "extrae texto"])
     intent_web = any(k in s for k in ["requests", "http", "scrape", "scraping", "extraer de web", "enlaces", "links"])
     intent_git = any(k in s for k in ["git", "commit", "push", "pull", "merge", "branch", "rama", "repo"])
-    intent_hotkey = any(k in s for k in ["hotkey", "atajo", "win+j", "tecla rápida"])
+    intent_voice = any(k in s for k in ["voz", "escuchar", "micrófono", "wake word", "listener"])
     intent_monitor = any(k in s for k in ["psutil", "cpu", "ram", "memoria", "batería", "procesos"])
 
     if intent_ocr:
@@ -350,8 +352,8 @@ def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str,
         _add_by_names(["web_search", "scrape_text", "scrape_links", "scrape_images", "monitor_price"])
     if intent_git:
         _add_by_names(["git_status", "git_diff", "git_smart_commit", "git_log", "git_branch", "git_describe_pr"])
-    if intent_hotkey:
-        _add_by_names(["start_hotkey_listener", "stop_hotkey_listener", "get_hotkey_status", "change_hotkey"])
+    if intent_voice:
+        _add_by_names(["start_voice_listener", "stop_voice_listener", "get_listener_status"])
     if intent_monitor:
         _add_by_names(["quick_status", "guard_status", "guard_alerts_history"])
 
@@ -474,7 +476,7 @@ You are a system administration assistant. Your primary directive is to help man
 You are in an interactive session; the working directory of the process is the user's cwd when launching the program. Use absolute paths when the user provides them, or relative to the current cwd.
 
 ## Language
-You must always respond in Russian, regardless of the language the user writes in. This is non-negotiable. Even if addressed in another language, J.A.R.V.I.S. replies exclusively in Russian."""
+You must always respond in Spanish (Español), regardless of the language the user writes in. This is non-negotiable. Even if addressed in another language, J.A.R.V.I.S. replies exclusively in Spanish."""
 
 
 def _now_iso() -> str:
@@ -899,7 +901,7 @@ def _run_tool_loop(
                             console.print("[bold yellow]Resolución de ruta ambigua:[/bold yellow]")
                             for i, c in enumerate(candidates[:10]):
                                 console.print(f"{i+1}. {c.get('name')} (score={c.get('score')}) -> {c.get('path')}")
-                            auto_pref = os.environ.get("AARIS_AUTO_RESOLVE_AMBIGUOUS", "").strip().lower()
+                            auto_pref = os.environ.get("JARVIS_AUTO_RESOLVE_AMBIGUOUS", "").strip().lower()
                             chosen_path = None
                             if auto_pref in ("", "none", "off"):
                                 ans = Prompt.ask("Elige número", default="1").strip()
@@ -969,7 +971,7 @@ def _run_tool_loop(
 
             if (
                 str(result).startswith("Error")
-                and os.environ.get("AARIS_TOOL_ERROR_HINT", "true").strip().lower()
+                and os.environ.get("JARVIS_TOOL_ERROR_HINT", "true").strip().lower()
                 in ("1", "true", "yes", "si", "sí", "on")
             ):
                 messages.append({
@@ -994,7 +996,7 @@ def _run_tool_loop(
 
     if hit_round_limit and not reply_content.strip():
         reply_content = (
-            "Se alcanzó el límite de rondas de herramientas (AARIS_MAX_TOOL_ROUNDS). "
+            "Se alcanzó el límite de rondas de herramientas (JARVIS_MAX_TOOL_ROUNDS). "
             "Repite la petición o aumenta el límite."
         )
 
@@ -1034,39 +1036,17 @@ def _run_simple_chat_streaming(messages: list, options: dict) -> str:
 
 def main():
     opts = _chat_options()
-    memory_path = os.path.abspath(DEFAULT_MEMORY_PATH)
     log_path = os.path.abspath(DEFAULT_LOG_PATH)
-    memory = _load_memory(memory_path)
-    prefix_messages = _build_prefix_messages(memory)
-    messages: list[dict[str, Any]] = prefix_messages[:]
 
-    try:
-        prefs = memory.get("preferences") or {}
-        ws_root = prefs.get("workspace_root") if isinstance(prefs, dict) else None
-        if ws_root:
-            resolved_ws = resolve_path(str(ws_root), must_exist=True)
-            if not str(resolved_ws).startswith("Error:"):
-                os.chdir(str(resolved_ws))
-    except Exception:
-        pass
+    # --- Brain (Obsidian vault) ---
+    brain = JarvisBrain()
+    brain.initialize()
 
-    available_tools = [
-        create_file, append_file, apply_template, apply_unified_patch,
-        read_file, edit_file, search_replace_in_file, create_folder,
-        insert_after, copy_path, detect_project, install_packages,
-        move_path, resolve_path, delete_path, exists_path, describe_path,
-        estimate_dir, count_dir_children_matches, disk_usage,
-        service_status, service_restart, service_wait_active,
-        service_health_report, service_restart_with_deps,
-        list_processes, tail_file, fuzzy_search_paths,
-        build_text_index, rag_query, project_workflow_suggest,
-        list_directory, glob_find, run_command, run_command_checked,
-        run_command_retry, policy_show, policy_set, policy_reset,
-        rollback, rollback_tokens, ast_list_functions, ast_read_function,
-        docker_ps, docker_logs, docker_exec, db_query_sqlite,
-        delegate_task, schedule_agent_task,
-    ]
+    # Mensajes base: solo system prompt
+    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
+    # Usar registry centralizado para todas las tools (Bug 7 fix)
+    available_tools = get_all_tools()
     tool_map = {f.__name__: f for f in available_tools}
     tool_groups = _build_tool_groups(available_tools)
     _turn_counter = 0
@@ -1076,11 +1056,11 @@ def main():
 
     console.print(
         Panel.fit(
-            f"[bold blue]AARIS[/bold blue] — asistente local (modelo [cyan]{MODEL}[/cyan])\n"
+            f"[bold blue]J.A.R.V.I.S.[/bold blue] — asistente local (modelo [cyan]{MODEL}[/cyan])\n"
             "Escribe salir / exit / quit para terminar.\n"
             "Comandos: `ver memoria`, `reset memoria`, `workspace show`, `set workspace <ruta>`.\n"
-            f"[dim]Opciones: OLLAMA_MODEL, OLLAMA_NUM_CTX, OLLAMA_TEMPERATURE, AARIS_MAX_TOOL_ROUNDS, "
-            f"AARIS_MAX_CONTEXT_MESSAGES, AARIS_BACKUP_MAX_AGE_DAYS[/dim]",
+            f"[dim]Opciones: OLLAMA_MODEL, OLLAMA_NUM_CTX, OLLAMA_TEMPERATURE, JARVIS_MAX_TOOL_ROUNDS, "
+            f"JARVIS_MAX_CONTEXT_MESSAGES, JARVIS_BACKUP_MAX_AGE_DAYS[/dim]",
             border_style="blue",
         )
     )
@@ -1088,14 +1068,14 @@ def main():
     import sys
     if "--server" in sys.argv:
         from http.server import BaseHTTPRequestHandler, HTTPServer
-        class AarisAPI(BaseHTTPRequestHandler):
+        class JarvisAPI(BaseHTTPRequestHandler):
             def do_POST(self):
                 if self.path == '/api/chat':
                     length = int(self.headers.get('Content-Length', '0'))
                     post_data = self.rfile.read(length)
                     data = json.loads(post_data.decode('utf-8'))
                     prompt = data.get('prompt', '')
-                    msgs = prefix_messages[:] + [{"role": "user", "content": prompt}]
+                    msgs = [{"role": "system", "content": SYSTEM_PROMPT}] + [{"role": "user", "content": prompt}]
                     active = _select_tools(prompt, available_tools, tool_groups)
                     reply = _run_tool_loop(msgs, active, tool_map, opts)
                     self.send_response(200)
@@ -1106,7 +1086,7 @@ def main():
                     self.send_response(404)
                     self.end_headers()
         server_address = ('', 8080)
-        httpd = HTTPServer(server_address, AarisAPI)
+        httpd = HTTPServer(server_address, JarvisAPI)
         console.print("[bold green]Starting daemon server on port 8080...[/bold green]")
         try:
             httpd.serve_forever()
@@ -1118,7 +1098,7 @@ def main():
         idx = sys.argv.index("--run-prompt")
         if idx + 1 < len(sys.argv):
             prompt = sys.argv[idx + 1]
-            msgs = prefix_messages[:] + [{"role": "user", "content": prompt}]
+            msgs = [{"role": "system", "content": SYSTEM_PROMPT}] + [{"role": "user", "content": prompt}]
             active = _select_tools(prompt, available_tools, tool_groups)
             reply = _run_tool_loop(msgs, active, tool_map, opts)
             console.print(Markdown(reply))
@@ -1137,20 +1117,13 @@ def main():
             low = user_input.lower().strip()
 
             if low in ("reset memoria", "olvidar memoria", "borrar memoria"):
-                memory = {"memory_summary": "", "stable_facts": [], "preferences": {}, "last_updated": "", "last_turns": []}
-                _save_memory(memory_path, memory)
-                messages = _build_prefix_messages(memory)
-                console.print("[dim]Memoria reiniciada. Empiezas con contexto limpio.[/dim]")
+                messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                console.print("[dim]Memoria de contexto reiniciada.[/dim]")
                 continue
 
             if low == "ver memoria":
-                console.print("\n[bold purple]Memoria persistente:[/bold purple]")
-                console.print(Markdown(memory.get("memory_summary") or "(vacía)"))
-                stable_facts = memory.get("stable_facts") or []
-                if stable_facts:
-                    console.print("\n[dim]Hechos estables:[/dim]")
-                    for fact in stable_facts[:20]:
-                        console.print(f"- {fact}")
+                console.print("\n[bold purple]Estado del vault:[/bold purple]")
+                console.print(brain.vault_status())
                 continue
 
             if low in ("undo last", "undo último", "undo ultimo"):
@@ -1234,18 +1207,15 @@ def main():
 
             if low in ("capabilities", "cap", "capacidades"):
                 console.print("[bold purple]Capabilities:[/bold purple]")
-                console.print(f"- AARIS_DRY_RUN={DRY_RUN}")
-                console.print(f"- AARIS_PLAN_MODE={PLAN_MODE}")
-                console.print(f"- AARIS_READ_ONLY={os.environ.get('AARIS_READ_ONLY', 'false')}")
-                console.print(f"- AARIS_USE_TRASH={os.environ.get('AARIS_USE_TRASH', 'true')}")
+                console.print(f"- JARVIS_DRY_RUN={DRY_RUN}")
+                console.print(f"- JARVIS_PLAN_MODE={PLAN_MODE}")
+                console.print(f"- JARVIS_READ_ONLY={os.environ.get('JARVIS_READ_ONLY', 'false')}")
+                console.print(f"- JARVIS_USE_TRASH={os.environ.get('JARVIS_USE_TRASH', 'true')}")
                 console.print(f"- Tools disponibles={len(available_tools)}")
-                console.print(f"- BACKUP_MAX_AGE_DAYS={BACKUP_MAX_AGE_DAYS}")
                 continue
 
             if low in ("workspace show", "workspace", "ver workspace"):
-                prefs = memory.get("preferences") or {}
-                ws_root = prefs.get("workspace_root") if isinstance(prefs, dict) else None
-                console.print(f"[bold purple]Workspace:[/bold purple] cwd={os.getcwd()}\nworkspace_root={ws_root or '(no configurado)'}")
+                console.print(f"[bold purple]Workspace:[/bold purple] cwd={os.getcwd()}")
                 continue
 
             if low.startswith("set workspace "):
@@ -1254,21 +1224,12 @@ def main():
                 if str(resolved_ws).startswith("Error:"):
                     console.print(f"[bold red]Error:[/bold red] {resolved_ws}")
                     continue
-                if not isinstance(memory.get("preferences"), dict):
-                    memory["preferences"] = {}
-                memory["preferences"]["workspace_root"] = resolved_ws
-                _save_memory(memory_path, memory)
                 os.chdir(resolved_ws)
-                messages = _build_prefix_messages(memory)
                 console.print(f"[dim]Workspace fijado: {resolved_ws}[/dim]")
                 continue
 
             if low in ("reset workspace", "clear workspace", "unset workspace"):
-                if isinstance(memory.get("preferences"), dict):
-                    memory["preferences"].pop("workspace_root", None)
-                    _save_memory(memory_path, memory)
                 os.chdir(str(Path.home()))
-                messages = _build_prefix_messages(memory)
                 console.print("[dim]Workspace eliminado. Vuelves a tu home.[/dim]")
                 continue
 
@@ -1391,6 +1352,12 @@ def main():
                 })
 
             turn_start_idx = len(messages)
+
+            # Inyectar contexto del vault de JARVIS (brain)
+            vault_context = brain.before_turn(user_input)
+            if vault_context:
+                messages.append({"role": "system", "content": vault_context})
+
             messages.append({"role": "user", "content": user_input})
 
             # Selección dinámica de herramientas
@@ -1472,17 +1439,23 @@ def main():
 
             messages = _prune_messages(messages, keep_last=MAX_CONTEXT_MESSAGES)
 
+            # Brain: registrar turno y aprender
             _turn_counter += 1
-            if _turn_counter % MEMORY_UPDATE_EVERY == 0 or tool_calls_log:
-                memory = _update_memory(messages, memory, opts)
-                _save_memory(DEFAULT_MEMORY_PATH, memory)
+            brain.after_turn(user_input, reply_content, tool_calls_log)
 
         except KeyboardInterrupt:
             console.print("\n[bold yellow]Cancelado. Saliendo…[/bold yellow]")
+            brain.shutdown("Sesión terminada por el usuario (Ctrl+C)")
             break
         except Exception as e:
             console.print(f"\n[bold red]Error:[/bold red] {e}")
             messages.append({"role": "system", "content": f"Error previo (no repetir): {e}"})
+
+    # Shutdown limpio del brain
+    try:
+        brain.shutdown("Sesión finalizada normalmente")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

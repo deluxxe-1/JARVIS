@@ -1,5 +1,4 @@
 import sys
-import threading
 import os
 from datetime import datetime
 import logging
@@ -11,26 +10,24 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, Signal, Slot
 from PySide6.QtGui import QFont, QColor, QPalette
 
-# Import engine API (public surface)
+# Import engine public API (no underscore prefix)
 from jarvis.engine import (
-    _load_memory,
-    _save_memory,
-    _build_prefix_messages,
-    _select_tools,
-    _run_tool_loop,
-    _run_simple_chat_streaming,
-    _prune_messages,
-    _build_tool_groups,
-    DEFAULT_MEMORY_PATH,
+    build_prefix_messages,
+    select_tools,
+    run_tool_loop,
+    run_simple_chat,
+    prune_messages,
+    build_tool_groups,
     MAX_CONTEXT_MESSAGES,
-    MEMORY_UPDATE_EVERY,
     MODEL,
-    console,
     SYSTEM_PROMPT,
 )
 
-# Tool registry (no `import *`)
+# Tool registry
 from jarvis.tools_registry import get_all_tools
+
+# Brain (Obsidian vault)
+from brain import JarvisBrain
 
 log = logging.getLogger("jarvis.gui")
 
@@ -38,25 +35,20 @@ class JarvisWorker(QThread):
     response_ready = Signal(str, str) # source ("Bot", "System"), text
     thinking_state = Signal(bool)
 
-    def __init__(self, user_text, messages, memory, available_tools, tool_groups, tool_map, opts):
+    def __init__(self, user_text, messages, available_tools, tool_groups, tool_map, opts):
         super().__init__()
         self.user_text = user_text
         self.messages = messages # reference to the exact array
-        self.memory = memory
         self.available_tools = available_tools
         self.tool_groups = tool_groups
         self.tool_map = tool_map
         self.opts = opts
 
     def run(self):
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
         self.thinking_state.emit(True)
         try:
             # Seleccionar tools (reduce contexto)
-            active_tools = _select_tools(self.user_text, self.available_tools, self.tool_groups)
+            active_tools = select_tools(self.user_text, self.available_tools, self.tool_groups)
             
             # Simple heuristic
             is_simple = False
@@ -67,19 +59,17 @@ class JarvisWorker(QThread):
 
             # Tool Loop
             if is_simple:
-                reply_content = _run_simple_chat_streaming(self.messages, self.opts)
+                reply_content = run_simple_chat(self.messages, self.opts)
             else:
-                reply_content = _run_tool_loop(self.messages, active_tools, self.tool_map, self.opts)
+                reply_content = run_tool_loop(self.messages, active_tools, self.tool_map, self.opts)
             
-            # Formateamos para el history y para hablar. As voices are currently defined in voice.py.
-            # Intentaremos emitir el texto para que la GUI lo pronuncie o pinte
             self.response_ready.emit("J.A.R.V.I.S.", reply_content)
 
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
             log.exception("Worker exception")
-            self.response_ready.emit("System", f"Ошибка: {e}\n{tb}")
+            self.response_ready.emit("System", f"Error: {e}\n{tb}")
         finally:
             self.thinking_state.emit(False)
 
@@ -183,19 +173,22 @@ class JarvisGUI(QMainWindow):
         self.worker = None
 
     def init_jarvis(self):
+        # Brain (Obsidian vault)
+        log.info("Initializing brain...")
+        self.brain = JarvisBrain()
+        self.brain.initialize()
+
         log.info("Loading tools...")
         self.available_tools = get_all_tools()
         log.info("Building tool groups...")
-        self.tool_groups = _build_tool_groups(self.available_tools)
+        self.tool_groups = build_tool_groups(self.available_tools)
         self.tool_map = {f.__name__: f for f in self.available_tools}
         
-        log.info("Loading memory...")
-        self.memory = _load_memory(DEFAULT_MEMORY_PATH)
         log.info("Building messages...")
-        self.messages = _build_prefix_messages(self.memory)
-        self.opts = {"temperature": 0.3} # Puede overridarse
+        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self.opts = {"temperature": 0.3}
 
-        self.append_chat("System", "Initializado. A la espera de órdenes.")
+        self.append_chat("System", "Inicializado. A la espera de órdenes.")
 
     def append_chat(self, sender, text):
         if sender == "You":
@@ -222,6 +215,11 @@ class JarvisGUI(QMainWindow):
         self.input_field.clear()
         self.append_chat("You", text)
         
+        # Inyectar contexto del vault antes de cada turno
+        vault_context = self.brain.before_turn(text)
+        if vault_context:
+            self.messages.append({"role": "system", "content": vault_context})
+
         # Prepare messages
         self.messages.append({"role": "user", "content": text})
 
@@ -230,7 +228,7 @@ class JarvisGUI(QMainWindow):
 
         # Launch Worker
         self.worker = JarvisWorker(
-            text, self.messages, self.memory, 
+            text, self.messages,
             self.available_tools, self.tool_groups, self.tool_map, self.opts
         )
         self.worker.response_ready.connect(self.on_bot_reply)
@@ -243,14 +241,21 @@ class JarvisGUI(QMainWindow):
         self.messages.append({"role": "assistant", "content": text})
         
         # Clean context
-        self.messages[:] = _prune_messages(self.messages, keep_last=MAX_CONTEXT_MESSAGES)
+        self.messages[:] = prune_messages(self.messages, keep_last=MAX_CONTEXT_MESSAGES)
+
+        # Brain: registrar turno y aprender
+        user_text = ""
+        for m in reversed(self.messages):
+            if m.get("role") == "user":
+                user_text = m.get("content", "")
+                break
+        self.brain.after_turn(user_text, text)
 
         # TTS (Optional but cool)
         try:
-            from voice import _get_speaker
-            speaker = _get_speaker()
-            if speaker:
-                speaker.speak_async(text)
+            from voice import VoiceSpeaker
+            speaker = VoiceSpeaker()
+            speaker.speak_async(text)
         except Exception as e:
             log.warning("Voice error: %s", e)
 
@@ -263,6 +268,14 @@ class JarvisGUI(QMainWindow):
             self.input_field.setEnabled(True)
             self.send_button.setEnabled(True)
             self.input_field.setFocus()
+
+    def closeEvent(self, event):
+        """Shutdown limpio del brain al cerrar la ventana."""
+        try:
+            self.brain.shutdown("Sesión GUI cerrada")
+        except Exception:
+            pass
+        super().closeEvent(event)
 
 if __name__ == "__main__":
     from jarvis.logging import configure_logging
