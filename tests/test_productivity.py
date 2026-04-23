@@ -28,6 +28,7 @@ from productivity import (
     get_password,
     list_passwords,
     delete_password,
+    rotate_vault_key,
     _BUILTIN_MACROS,
     _load_json,
     _save_json,
@@ -42,11 +43,13 @@ def tmp_jarvis_dir(tmp_path):
     original_reminders = productivity.REMINDERS_PATH
     original_macros = productivity.MACROS_PATH
     original_vault = productivity.VAULT_PATH
+    original_vault_meta = getattr(productivity, "VAULT_META_PATH", None)
 
     productivity._JARVIS_DIR = tmp_path
     productivity.REMINDERS_PATH = tmp_path / "reminders.json"
     productivity.MACROS_PATH = tmp_path / "macros.json"
     productivity.VAULT_PATH = tmp_path / "vault.enc"
+    productivity.VAULT_META_PATH = tmp_path / "vault.meta.json"
 
     yield tmp_path
 
@@ -54,6 +57,8 @@ def tmp_jarvis_dir(tmp_path):
     productivity.REMINDERS_PATH = original_reminders
     productivity.MACROS_PATH = original_macros
     productivity.VAULT_PATH = original_vault
+    if original_vault_meta is not None:
+        productivity.VAULT_META_PATH = original_vault_meta
 
 
 # ---------------------------------------------------------------------------
@@ -265,3 +270,23 @@ class TestPasswords:
         with patch.dict(os.environ, {"JARVIS_VAULT_KEY": "test_key_000"}, clear=False):
             result = get_password("nonexistent_service")
             assert "Error" in result
+
+    def test_vault_meta_created_on_save(self, tmp_jarvis_dir):
+        import productivity
+        with patch.dict(os.environ, {"JARVIS_VAULT_KEY": "test_master_key_meta"}, clear=False):
+            save_password("github", "user@test.com", "mypass123")
+            assert productivity.VAULT_PATH.is_file()
+            assert productivity.VAULT_META_PATH.is_file()
+
+    def test_rotate_vault_key(self, tmp_jarvis_dir):
+        with patch.dict(os.environ, {"JARVIS_VAULT_KEY": "old_key"}, clear=False):
+            save_password("github", "u", "p1")
+            rotate_res = rotate_vault_key("new_key", confirm=True)
+            data = json.loads(rotate_res)
+            assert data["status"] == "ok"
+
+        # Con la nueva key debe poder desencriptar
+        with patch.dict(os.environ, {"JARVIS_VAULT_KEY": "new_key"}, clear=False):
+            get_res = get_password("github")
+            get_data = json.loads(get_res)
+            assert get_data["password"] == "p1"

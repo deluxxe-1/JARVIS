@@ -15,6 +15,7 @@ import threading
 import time
 import base64
 import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Any
@@ -32,6 +33,7 @@ _JARVIS_DIR = Path(os.environ.get(
 REMINDERS_PATH = _JARVIS_DIR / "reminders.json"
 MACROS_PATH = _JARVIS_DIR / "macros.json"
 VAULT_PATH = _JARVIS_DIR / "vault.enc"
+VAULT_META_PATH = _JARVIS_DIR / "vault.meta.json"
 REMINDER_CHECK_INTERVAL = 30  # segundos
 
 
@@ -530,11 +532,45 @@ def delete_macro(name: str, confirm: bool = False) -> str:
 # ============================================================================
 
 def _derive_key(master: str) -> bytes:
-    """Deriva una clave Fernet a partir de una master password."""
-    # PBKDF2-like: SHA256 con salt fijo (simple pero funcional para uso personal)
+    """Deriva una clave Fernet a partir de una master password (legacy)."""
     salt = b"JARVIS_VAULT_SALT_2026"
     dk = hashlib.pbkdf2_hmac("sha256", master.encode("utf-8"), salt, iterations=100_000)
     return base64.urlsafe_b64encode(dk)
+
+
+def _derive_key_v2(master: str, salt: bytes, iterations: int = 200_000) -> bytes:
+    """Deriva clave con salt por-vault (recomendado)."""
+    dk = hashlib.pbkdf2_hmac("sha256", master.encode("utf-8"), salt, iterations=iterations)
+    return base64.urlsafe_b64encode(dk)
+
+
+def _load_vault_meta() -> tuple[dict[str, Any], Optional[str]]:
+    """
+    Meta del vault:
+    {
+      "kdf": "pbkdf2_hmac_sha256",
+      "iterations": 200000,
+      "salt_b64": "..."
+    }
+    """
+    try:
+        if not VAULT_META_PATH.is_file():
+            return {}, None
+        meta = json.loads(VAULT_META_PATH.read_text(encoding="utf-8"))
+        return meta if isinstance(meta, dict) else {}, None
+    except Exception as e:
+        return {}, f"Error al leer vault meta: {e}"
+
+
+def _save_vault_meta(meta: dict[str, Any]) -> Optional[str]:
+    try:
+        _ensure_dir()
+        tmp = VAULT_META_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(VAULT_META_PATH)
+        return None
+    except Exception as e:
+        return f"Error al guardar vault meta: {e}"
 
 
 def _get_master_key() -> Optional[str]:
@@ -556,8 +592,23 @@ def _get_fernet():
     if not master:
         return None, "Error: JARVIS_VAULT_KEY no configurado. Set JARVIS_VAULT_KEY=tu_clave_maestra"
 
-    key = _derive_key(master)
-    return Fernet(key), None
+    meta, meta_err = _load_vault_meta()
+    if meta_err:
+        return None, meta_err
+
+    # Si no hay meta, usamos modo legacy para mantener compatibilidad.
+    if not meta:
+        key = _derive_key(master)
+        return Fernet(key), None
+
+    try:
+        salt_b64 = str(meta.get("salt_b64", "")).strip()
+        iterations = int(meta.get("iterations", 200_000))
+        salt = base64.b64decode(salt_b64.encode("ascii"))
+        key = _derive_key_v2(master, salt=salt, iterations=iterations)
+        return Fernet(key), None
+    except Exception as e:
+        return None, f"Error: vault meta inválido: {e}"
 
 
 def _load_vault() -> tuple[dict[str, Any], Optional[str]]:
@@ -581,6 +632,23 @@ def _load_vault() -> tuple[dict[str, Any], Optional[str]]:
 
 def _save_vault(data: dict[str, Any]) -> Optional[str]:
     """Guarda el vault encriptado."""
+    # Si no existe meta aún, creamos meta nueva y migramos a v2 al guardar.
+    meta, meta_err = _load_vault_meta()
+    if meta_err:
+        return meta_err
+
+    if not meta:
+        salt = secrets.token_bytes(16)
+        meta = {
+            "kdf": "pbkdf2_hmac_sha256",
+            "iterations": 200_000,
+            "salt_b64": base64.b64encode(salt).decode("ascii"),
+        }
+        save_meta_err = _save_vault_meta(meta)
+        if save_meta_err:
+            return save_meta_err
+
+    # Con meta presente, `_get_fernet` usará v2.
     fernet, err = _get_fernet()
     if err:
         return err
@@ -595,6 +663,43 @@ def _save_vault(data: dict[str, Any]) -> Optional[str]:
         return None
     except Exception as e:
         return f"Error al guardar vault: {e}"
+
+
+def rotate_vault_key(new_master_key: str, confirm: bool = False) -> str:
+    """
+    Re-encripta el vault con una nueva master key (sin perder entradas).
+
+    Requiere que `JARVIS_VAULT_KEY` actual sea válida para desencriptar.
+    """
+    try:
+        if not confirm:
+            return "Confirmación requerida. Repite con confirm=true."
+        if not new_master_key or not new_master_key.strip():
+            return "Error: new_master_key vacío."
+
+        vault, err = _load_vault()
+        if err:
+            return err
+
+        # Forzamos meta (si no existe, se crea en _save_vault durante migración).
+        meta, meta_err = _load_vault_meta()
+        if meta_err:
+            return meta_err
+
+        # Construimos Fernet con la nueva key y meta (v2 si existe, o la creará al guardar).
+        old_env = os.environ.get("JARVIS_VAULT_KEY", "")
+        os.environ["JARVIS_VAULT_KEY"] = new_master_key.strip()
+        try:
+            save_err = _save_vault(vault)
+            if save_err:
+                return save_err
+        finally:
+            # Restaurar env para no sorprender a quien llama.
+            os.environ["JARVIS_VAULT_KEY"] = old_env
+
+        return json.dumps({"status": "ok", "rotated": True}, ensure_ascii=False)
+    except Exception as e:
+        return f"Error en rotate_vault_key: {e}"
 
 
 def generate_password(

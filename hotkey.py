@@ -21,14 +21,10 @@ _hotkey_thread: Optional[threading.Thread] = None
 _hotkey_callback: Optional[Callable] = None
 
 
-def start_hotkey_listener(callback: Optional[Callable] = None) -> str:
+def start_hotkey_listener() -> str:
     """
     Inicia el listener de hotkey global en segundo plano.
-    Cuando se detecta la combinación (por defecto Win+J), ejecuta el callback.
-
-    Args:
-        callback: Función sin argumentos a ejecutar al detectar el hotkey.
-                  Si None, usa el callback por defecto (notificación).
+    Cuando se detecta la combinación (por defecto Win+J), ejecuta el callback por defecto.
     """
     global _hotkey_thread, _hotkey_callback
 
@@ -43,7 +39,7 @@ def start_hotkey_listener(callback: Optional[Callable] = None) -> str:
     if _hotkey_thread is not None and _hotkey_thread.is_alive():
         return f"El listener de hotkey ya está activo (combo: {HOTKEY_COMBO})."
 
-    _hotkey_callback = callback
+    _hotkey_callback = None
 
     def _default_callback():
         """Callback por defecto: muestra notificación."""

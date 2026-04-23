@@ -1,20 +1,6 @@
-"""
-JARVIS Tools Module — Herramientas del sistema adaptadas para Windows.
-
-Equivalente de AARIS tools.py (Linux) pero con soporte nativo de Windows:
-- PowerShell en lugar de bash
-- Servicios Windows (Get-Service) en lugar de systemctl
-- Carpetas conocidas Windows en lugar de XDG
-- Papelera de reciclaje via send2trash
-- Gestores de paquetes: winget, chocolatey, scoop
-- Procesos via psutil/tasklist
-- Programador de tareas via schtasks
-"""
-
 import glob as glob_module
 import json
 import os
-import platform
 import subprocess
 from pathlib import Path
 import re
@@ -31,12 +17,8 @@ import time
 from contextlib import contextmanager
 
 
-# ---------------------------------------------------------------------------
-# Utilidades base
-# ---------------------------------------------------------------------------
-
 def _norm_text(s: str) -> str:
-    """Normaliza acentos y hace casefold para comparaciones robustas."""
+    # Normaliza acentos y hace casefold para comparaciones robustas.
     s = unicodedata.normalize("NFKD", s)
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
     return s.casefold()
@@ -50,41 +32,34 @@ def _is_relative_to(path: Path, base: Path) -> bool:
         return False
 
 
-def _is_windows() -> bool:
-    return platform.system() == "Windows"
-
-
 def _read_only_mode() -> bool:
-    val = os.environ.get("JARVIS_READ_ONLY", "false").strip().lower()
+    val = os.environ.get("AARIS_READ_ONLY", "false").strip().lower()
     return val in ("1", "true", "yes", "si", "sí", "on")
 
 
 def _read_only_allow_undo() -> bool:
-    val = os.environ.get("JARVIS_READ_ONLY_ALLOW_UNDO", "true").strip().lower()
+    val = os.environ.get("AARIS_READ_ONLY_ALLOW_UNDO", "true").strip().lower()
     return val in ("1", "true", "yes", "si", "sí", "on")
 
-
-# ---------------------------------------------------------------------------
-# Política de seguridad
-# ---------------------------------------------------------------------------
 
 _POLICY_CACHE: Optional[dict[str, Any]] = None
 
 
 def _load_policy() -> dict[str, Any]:
     """
-    Carga políticas desde env `JARVIS_POLICY_JSON` (string JSON).
+    Carga políticas desde env `AARIS_POLICY_JSON` (string JSON).
     Ejemplo:
-      set JARVIS_POLICY_JSON={"forbidden_path_prefixes":["C:\\Windows\\"],"require_confirm_tools":["delete_path"]}
+      export AARIS_POLICY_JSON='{"forbidden_path_prefixes":["/etc/"],"require_confirm_tools":["delete_path"]}'
     """
     global _POLICY_CACHE
     if _POLICY_CACHE is not None:
         return _POLICY_CACHE
-    raw = os.environ.get("JARVIS_POLICY_JSON", "").strip()
+    raw = os.environ.get("AARIS_POLICY_JSON", "").strip()
     if not raw:
+        # Si no hay env, intentamos con fichero.
         policy_path = os.environ.get(
-            "JARVIS_POLICY_PATH",
-            os.path.join(os.path.expanduser("~"), ".jarvis", "policy.json"),
+            "AARIS_POLICY_PATH",
+            os.path.join(os.path.expanduser("~"), ".aaris", "policy.json"),
         )
         try:
             p = Path(policy_path).expanduser()
@@ -109,13 +84,10 @@ def _policy_forbidden_reason(abs_path: str) -> Optional[str]:
     forbidden = policy.get("forbidden_path_prefixes") or []
     if not isinstance(forbidden, list):
         return None
-    # Normalizar para comparación case-insensitive en Windows
-    abs_norm = abs_path.replace("/", "\\").lower()
     for pref in forbidden:
         if not isinstance(pref, str):
             continue
-        pref_norm = pref.replace("/", "\\").lower()
-        if pref_norm and abs_norm.startswith(pref_norm):
+        if pref and abs_path.startswith(pref):
             return f"Error: política prohíbe tocar {pref}. Ruta: {abs_path}"
     return None
 
@@ -140,7 +112,7 @@ def policy_show() -> str:
 
 def policy_set(policy_json: str, allow_dangerous: bool = False) -> str:
     """
-    Sobrescribe la política en el fichero JARVIS_POLICY_PATH.
+    Sobrescribe la política en el fichero AARIS_POLICY_PATH.
 
     Requiere allow_dangerous=true (esta tool escribe disco).
     """
@@ -153,14 +125,15 @@ def policy_set(policy_json: str, allow_dangerous: bool = False) -> str:
         if not isinstance(parsed, dict):
             return "Error: policy_json debe ser un objeto JSON."
         policy_path = os.environ.get(
-            "JARVIS_POLICY_PATH",
-            os.path.join(os.path.expanduser("~"), ".jarvis", "policy.json"),
+            "AARIS_POLICY_PATH",
+            os.path.join(os.path.expanduser("~"), ".aaris", "policy.json"),
         )
         p = Path(policy_path).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(p.suffix + ".tmp")
         tmp.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(p)
+        # Limpia cache para recargar.
         global _POLICY_CACHE
         _POLICY_CACHE = None
         return f"OK policy_set en {p}"
@@ -176,8 +149,8 @@ def policy_reset(allow_dangerous: bool = False) -> str:
         if not allow_dangerous:
             return "Error: policy_reset escribe/borrado disco. Usa allow_dangerous=true."
         policy_path = os.environ.get(
-            "JARVIS_POLICY_PATH",
-            os.path.join(os.path.expanduser("~"), ".jarvis", "policy.json"),
+            "AARIS_POLICY_PATH",
+            os.path.join(os.path.expanduser("~"), ".aaris", "policy.json"),
         )
         p = Path(policy_path).expanduser()
         if p.is_file():
@@ -189,12 +162,8 @@ def policy_reset(allow_dangerous: bool = False) -> str:
         return f"Error en policy_reset: {e}"
 
 
-# ---------------------------------------------------------------------------
-# Symlink validation (adaptado a Windows)
-# ---------------------------------------------------------------------------
-
 def _allow_symlink_escape() -> bool:
-    val = os.environ.get("JARVIS_ALLOW_SYMLINK_ESCAPE", "false").strip().lower()
+    val = os.environ.get("AARIS_ALLOW_SYMLINK_ESCAPE", "false").strip().lower()
     return val in ("1", "true", "yes", "si", "sí", "on")
 
 
@@ -216,7 +185,9 @@ def _validate_symlink_for_path(abs_path: str, allow_escape: bool = False) -> Opt
     try:
         home = Path.home().resolve()
         p = Path(abs_path)
-        cur = Path(p.anchor)
+        # Recorremos componentes y bloqueamos si cualquier componente es symlink
+        # que resuelva fuera del home (deep escape).
+        cur = Path(p.root)
         for part in p.parts[1:]:
             cur = cur / part
             if cur.is_symlink():
@@ -226,24 +197,25 @@ def _validate_symlink_for_path(abs_path: str, allow_escape: bool = False) -> Opt
                     return f"Error: no pude resolver symlink: {cur}"
                 if not _is_relative_to(target, home):
                     return f"Error: un componente es symlink y escapa del home. Ruta: {abs_path} (via {cur} -> {target})"
+        # Si el path final también es symlink, mantenemos el check.
         if p.is_symlink() and _symlink_escapes_home(abs_path):
             return f"Error: la ruta es un symlink y apunta fuera de tu home. Ruta: {abs_path}"
         return None
     except Exception:
+        # Si algo falla en el check, preferimos permitir para no romper flujos,
+        # pero podrías endurecer si lo quieres.
         return None
 
 
-# ---------------------------------------------------------------------------
-# Backup / Rollback
-# ---------------------------------------------------------------------------
-
 def _backup_base_dir() -> Path:
-    if os.environ.get("JARVIS_BACKUP_PATH"):
-        return Path(os.environ.get("JARVIS_BACKUP_PATH", "")).expanduser().resolve()
-    app_dir = os.environ.get("JARVIS_APP_DIR")
+    # Por defecto intentamos guardar backups dentro del cwd para compatibilidad con sandboxes.
+    # El usuario puede forzar otra ubicación con `AARIS_BACKUP_PATH`.
+    if os.environ.get("AARIS_BACKUP_PATH"):
+        return Path(os.environ.get("AARIS_BACKUP_PATH", "")).expanduser().resolve()
+    app_dir = os.environ.get("AARIS_APP_DIR")
     if app_dir:
         return Path(app_dir).expanduser().resolve() / "backups"
-    return Path(os.getcwd()).resolve() / ".jarvis" / "backups"
+    return Path(os.getcwd()).resolve() / ".aaris" / "backups"
 
 
 def _ensure_backup_dirs() -> tuple[Path, Path]:
@@ -256,13 +228,16 @@ def _ensure_backup_dirs() -> tuple[Path, Path]:
 
 
 def _lock_base_dir() -> Path:
-    if os.environ.get("JARVIS_LOCK_PATH"):
-        return Path(os.environ.get("JARVIS_LOCK_PATH", "")).expanduser().resolve()
-    return Path(os.getcwd()).resolve() / ".jarvis" / "locks"
+    # Prefer a path inside the current working directory for sandbox compatibility.
+    if os.environ.get("AARIS_LOCK_PATH"):
+        return Path(os.environ.get("AARIS_LOCK_PATH", "")).expanduser().resolve()
+    return Path(os.getcwd()).resolve() / ".aaris" / "locks"
 
 
 def _acquire_path_lock(abs_path: str, timeout_seconds: int = 25) -> Optional[Path]:
-    """Bloqueo simple por ruta (archivo lock) para evitar condiciones de carrera."""
+    """
+    Bloqueo simple por ruta (archivo lock) para evitar condiciones de carrera.
+    """
     try:
         lock_dir = _lock_base_dir()
         lock_dir.mkdir(parents=True, exist_ok=True)
@@ -303,10 +278,15 @@ def _path_lock(abs_path: str):
 
 
 def _create_file_backup(src: Path) -> str:
-    """Crea un backup de un archivo existente para rollback. Retorna un token."""
+    """
+    Crea un backup de un archivo existente para rollback.
+    Retorna un token.
+    """
     files_dir, meta_dir = _ensure_backup_dirs()
     token = uuid.uuid4().hex
     backup_path = files_dir / f"{token}.bak"
+
+    # Copiamos bytes para soportar cualquier contenido.
     backup_path.write_bytes(src.read_bytes())
     meta_path = meta_dir / f"{token}.json"
     meta = {
@@ -322,7 +302,7 @@ def _create_file_backup(src: Path) -> str:
 def _create_move_backup(from_path: Path, to_path: Path) -> str:
     files_dir, meta_dir = _ensure_backup_dirs()
     token = uuid.uuid4().hex
-    _ = files_dir
+    _ = files_dir  # solo para asegurar dirs
     meta_path = meta_dir / f"{token}.json"
     meta = {
         "type": "move",
@@ -334,7 +314,7 @@ def _create_move_backup(from_path: Path, to_path: Path) -> str:
     return token
 
 
-def _create_trash_backup(original_path: Path, info: str) -> str:
+def _create_trash_backup(original_path: Path, trash_dest: Path) -> str:
     files_dir, meta_dir = _ensure_backup_dirs()
     _ = files_dir
     token = uuid.uuid4().hex
@@ -342,7 +322,7 @@ def _create_trash_backup(original_path: Path, info: str) -> str:
     meta = {
         "type": "trash",
         "original_path": str(original_path.resolve()),
-        "info": info,
+        "trash_dest": str(trash_dest.resolve()),
         "created_at": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
     }
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -355,7 +335,7 @@ def rollback(token: str, overwrite: bool = False) -> str:
     """
     try:
         if _read_only_mode() and not _read_only_allow_undo():
-            return "Error: JARVIS_READ_ONLY=true. rollback deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. rollback deshabilitado."
         base = _backup_base_dir()
         meta_path = base / "meta" / f"{token}.json"
         if not meta_path.is_file():
@@ -391,10 +371,20 @@ def rollback(token: str, overwrite: bool = False) -> str:
             return f"Rollback OK: movido de vuelta a {from_path}"
 
         if mtype == "trash":
-            return (
-                "Error: rollback de Papelera de Reciclaje de Windows no es posible "
-                "programáticamente. Restaura el archivo manualmente desde la Papelera."
-            )
+            original_path = Path(str(meta.get("original_path") or "")).expanduser()
+            trash_dest = Path(str(meta.get("trash_dest") or "")).expanduser()
+            if not trash_dest.exists():
+                return f"Error: la entrada de Trash no existe: {trash_dest}"
+            if original_path.exists() and not overwrite:
+                return f"Error: destino existe: {original_path}. Usa overwrite=true."
+            original_path.parent.mkdir(parents=True, exist_ok=True)
+            if original_path.exists() and overwrite:
+                if original_path.is_dir():
+                    shutil.rmtree(str(original_path))
+                else:
+                    original_path.unlink()
+            shutil.move(str(trash_dest), str(original_path))
+            return f"Rollback OK: restaurado desde Trash a {original_path}"
 
         return f"Error: tipo de token no soportado: {mtype}"
     except Exception as e:
@@ -403,16 +393,17 @@ def rollback(token: str, overwrite: bool = False) -> str:
 
 def rollback_tokens(tokens: str, overwrite: bool = False) -> str:
     """
-    Restaura múltiples tokens generados por borrados/ediciones.
+    Restaura múltiples tokens generados por borrados/ediciones (p.ej. Trash masivo).
     `tokens` puede ser una lista separada por comas o espacios.
     """
     try:
         if _read_only_mode() and not _read_only_allow_undo():
-            return "Error: JARVIS_READ_ONLY=true. rollback_tokens deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. rollback_tokens deshabilitado."
         raw = (tokens or "").strip()
         if not raw:
             return "Error: tokens vacío."
         parts = [p.strip() for p in raw.replace(";", ",").replace("|", ",").split(",") if p.strip()]
+        # Si viene como "a b c" (sin comas), fallback.
         if len(parts) <= 1 and " " in raw and "," not in raw:
             parts = [p.strip() for p in raw.split() if p.strip()]
 
@@ -425,232 +416,70 @@ def rollback_tokens(tokens: str, overwrite: bool = False) -> str:
         return f"Error en rollback_tokens: {e}"
 
 
-# ---------------------------------------------------------------------------
-# Resolve Path — Carpetas conocidas de Windows
-# ---------------------------------------------------------------------------
-
-_KNOWN_FOLDERS_CACHE: Optional[dict[str, str]] = None
+_XDG_USER_DIRS_CACHE: Optional[dict[str, str]] = None
 
 
-def _load_known_folders() -> dict[str, str]:
+def _load_xdg_user_dirs() -> dict[str, str]:
     """
-    Detecta las carpetas conocidas de Windows usando variables de entorno
-    y fallbacks estándar.
-    """
-    global _KNOWN_FOLDERS_CACHE
-    if _KNOWN_FOLDERS_CACHE is not None:
-        return _KNOWN_FOLDERS_CACHE
+    Lee `~/.config/user-dirs.dirs` (XDG user dirs) y devuelve un mapeo por categoría.
 
-    home = str(Path.home().resolve())
+    Categorías soportadas: documents, downloads, desktop, music, pictures, videos, public.
+    """
+    global _XDG_USER_DIRS_CACHE
+    if _XDG_USER_DIRS_CACHE is not None:
+        return _XDG_USER_DIRS_CACHE
+
+    home = Path.home().resolve()
+    xdg_file = home / ".config" / "user-dirs.dirs"
     result: dict[str, str] = {}
+    if not xdg_file.is_file():
+        _XDG_USER_DIRS_CACHE = result
+        return result
 
-    # Mapeo canónico de carpetas conocidas Windows
-    known = {
-        "documents": os.environ.get("USERPROFILE", home) + "\\Documents",
-        "downloads": os.environ.get("USERPROFILE", home) + "\\Downloads",
-        "desktop":   os.environ.get("USERPROFILE", home) + "\\Desktop",
-        "music":     os.environ.get("USERPROFILE", home) + "\\Music",
-        "pictures":  os.environ.get("USERPROFILE", home) + "\\Pictures",
-        "videos":    os.environ.get("USERPROFILE", home) + "\\Videos",
-        "appdata":   os.environ.get("APPDATA", os.path.join(home, "AppData", "Roaming")),
-        "localappdata": os.environ.get("LOCALAPPDATA", os.path.join(home, "AppData", "Local")),
-        "temp":      os.environ.get("TEMP", os.environ.get("TMP", os.path.join(home, "AppData", "Local", "Temp"))),
-        "public":    os.environ.get("PUBLIC", "C:\\Users\\Public"),
-        "programfiles": os.environ.get("ProgramFiles", "C:\\Program Files"),
-        "programfiles86": os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+    var_map = {
+        "documents": "XDG_DOCUMENTS_DIR",
+        "downloads": "XDG_DOWNLOAD_DIR",
+        "desktop": "XDG_DESKTOP_DIR",
+        "music": "XDG_MUSIC_DIR",
+        "pictures": "XDG_PICTURES_DIR",
+        "videos": "XDG_VIDEOS_DIR",
+        "public": "XDG_PUBLICSHARE_DIR",
     }
 
-    # Verificar que las carpetas existan
-    for cat, folder_path in known.items():
-        resolved = os.path.abspath(folder_path)
-        result[cat] = resolved
+    try:
+        text = xdg_file.read_text(encoding="utf-8", errors="replace")
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
 
-    _KNOWN_FOLDERS_CACHE = result
+            # Solo nos interesan las variables del mapa.
+            cat: Optional[str] = None
+            for c, v in var_map.items():
+                if v == key:
+                    cat = c
+                    break
+            if not cat:
+                continue
+
+            # Sustituye $HOME y expande el resto de variables.
+            if "$HOME" in val:
+                val = val.replace("$HOME", str(home))
+            expanded = os.path.expandvars(val)
+            expanded = os.path.abspath(expanded)
+
+            if expanded.startswith(str(home)):
+                result[cat] = expanded
+    except Exception:
+        # Si hay corrupción/encoding raro, simplemente caemos en el mapeo fuzzy.
+        result = {}
+
+    _XDG_USER_DIRS_CACHE = result
     return result
 
-
-def resolve_path(path: str, cwd: Optional[str] = None, must_exist: bool = False) -> str:
-    """
-    Resuelve rutas "humanas" a rutas absolutas reales en Windows.
-
-    - Si el usuario pasa `Documents/...` se interpreta como `%USERPROFILE%\\Documents\\...`.
-    - Si el usuario pasa una ruta absoluta (`C:\\...`) se respeta tal cual.
-    - Acepta tanto barras / como \\ indistintamente.
-    """
-    try:
-        if cwd is None:
-            cwd = os.getcwd()
-
-        raw = (path or "").strip()
-        if not raw:
-            return "Error: path vacío."
-
-        # Normalizar barras
-        raw = raw.replace("/", os.sep)
-        expanded = os.path.expanduser(raw)
-        expanded = os.path.expandvars(expanded)
-
-        if os.path.isabs(expanded):
-            abs_path = os.path.abspath(expanded)
-            if must_exist and not os.path.exists(abs_path):
-                return f"Error: la ruta no existe: {abs_path}"
-            return abs_path
-
-        home = Path.home().resolve()
-        tokens = [t for t in expanded.replace("\\", "/").split("/") if t]
-        if not tokens:
-            return "Error: path inválido."
-
-        # Mapeo de alias comunes
-        home_aliases: dict[str, list[str]] = {
-            _norm_text("documents"):  ["Documents"],
-            _norm_text("documentos"): ["Documents"],
-            _norm_text("docs"):       ["Documents"],
-            _norm_text("doc"):        ["Documents"],
-            _norm_text("downloads"):  ["Downloads"],
-            _norm_text("descargas"):  ["Downloads"],
-            _norm_text("download"):   ["Downloads"],
-            _norm_text("desktop"):    ["Desktop"],
-            _norm_text("escritorio"): ["Desktop"],
-            _norm_text("music"):      ["Music"],
-            _norm_text("musica"):     ["Music"],
-            _norm_text("música"):     ["Music"],
-            _norm_text("pictures"):   ["Pictures"],
-            _norm_text("photos"):     ["Pictures"],
-            _norm_text("images"):     ["Pictures"],
-            _norm_text("imagenes"):   ["Pictures"],
-            _norm_text("imágenes"):   ["Pictures"],
-            _norm_text("videos"):     ["Videos"],
-            _norm_text("video"):      ["Videos"],
-            _norm_text("public"):     ["Public"],
-            _norm_text("público"):    ["Public"],
-            _norm_text("publico"):    ["Public"],
-            _norm_text("appdata"):    ["AppData", "AppData\\Roaming"],
-            _norm_text("temp"):       ["AppData\\Local\\Temp"],
-        }
-
-        # Mapeo a carpetas conocidas Windows
-        alias_to_category: dict[str, str] = {
-            _norm_text("documents"):  "documents",
-            _norm_text("documentos"): "documents",
-            _norm_text("docs"):       "documents",
-            _norm_text("doc"):        "documents",
-            _norm_text("downloads"):  "downloads",
-            _norm_text("descargas"):  "downloads",
-            _norm_text("download"):   "downloads",
-            _norm_text("desktop"):    "desktop",
-            _norm_text("escritorio"): "desktop",
-            _norm_text("music"):      "music",
-            _norm_text("musica"):     "music",
-            _norm_text("música"):     "music",
-            _norm_text("pictures"):   "pictures",
-            _norm_text("photos"):     "pictures",
-            _norm_text("images"):     "pictures",
-            _norm_text("imagenes"):   "pictures",
-            _norm_text("imágenes"):   "pictures",
-            _norm_text("videos"):     "videos",
-            _norm_text("video"):      "videos",
-            _norm_text("public"):     "public",
-            _norm_text("público"):    "public",
-            _norm_text("publico"):    "public",
-            _norm_text("appdata"):    "appdata",
-            _norm_text("temp"):       "temp",
-        }
-
-        first_norm = _norm_text(tokens[0])
-
-        # Primero intentar con carpetas conocidas de Windows
-        known_folders = _load_known_folders()
-        if first_norm in alias_to_category:
-            cat = alias_to_category[first_norm]
-            base_folder = known_folders.get(cat)
-            if base_folder:
-                rest = os.sep.join(tokens[1:])
-                abs_path = os.path.abspath(os.path.join(base_folder, rest)) if rest else os.path.abspath(base_folder)
-                if must_exist and not os.path.exists(abs_path):
-                    return f"Error: la ruta no existe: {abs_path}"
-                return abs_path
-
-        # Fallback: intento con alias en home
-        if first_norm in home_aliases:
-            expected = home_aliases[first_norm]
-            entries = [p for p in home.iterdir() if p.is_dir()]
-
-            # Match exacto ignorando case/acento
-            for e in entries:
-                for exp in expected:
-                    exp_name = exp.split("\\")[0] if "\\" in exp else exp
-                    if _norm_text(e.name) == _norm_text(exp_name):
-                        base_dir = e
-                        rest = os.sep.join(tokens[1:])
-                        abs_path = str((base_dir / rest).resolve()) if rest else str(base_dir)
-                        if must_exist and not os.path.exists(abs_path):
-                            return f"Error: la ruta no existe: {abs_path}"
-                        return abs_path
-
-            # Fuzzy match
-            expected_norm = [_norm_text(x.split("\\")[0] if "\\" in x else x) for x in expected]
-            best_score = 0.0
-            best_name: Optional[str] = None
-            scored_entries: list[tuple[float, str]] = []
-            for e in entries:
-                name_norm = _norm_text(e.name)
-                score = max(difflib.SequenceMatcher(None, name_norm, exp).ratio() for exp in expected_norm)
-                if score > best_score:
-                    best_score = score
-                    best_name = e.name
-                scored_entries.append((score, e.name))
-
-            if best_name and best_score >= 0.67:
-                base_dir = home / best_name
-                rest = os.sep.join(tokens[1:])
-                abs_path = str((base_dir / rest).resolve()) if rest else str(base_dir)
-                if must_exist and not os.path.exists(abs_path):
-                    return f"Error: la ruta no existe: {abs_path}"
-                return abs_path
-
-            if must_exist and scored_entries:
-                scored_entries.sort(key=lambda x: x[0], reverse=True)
-                top = scored_entries[:5]
-                candidates_json = [
-                    {
-                        "name": name,
-                        "score": score,
-                        "path": str((home / name).resolve()),
-                    }
-                    for score, name in top
-                ]
-                candidates = ", ".join([f"{name}({score:.2f})" for score, name in top])
-                return (
-                    f"Error: mapeo ambiguo para `{tokens[0]}`. "
-                    f"Candidatos en tu perfil: {candidates}. "
-                    f"CANDIDATES_JSON={json.dumps(candidates_json, ensure_ascii=False)}. "
-                    "Repite usando el nombre exacto (o una ruta absoluta)."
-                )
-
-            if not must_exist:
-                base_dir = home / expected[0]
-                rest = os.sep.join(tokens[1:])
-                abs_path = os.path.abspath(str(base_dir / rest)) if rest else os.path.abspath(str(base_dir))
-                return abs_path
-
-            return (
-                f"Error: no pude mapear `{tokens[0]}` a una carpeta real en tu perfil. "
-                "Usa una ruta con el nombre exacto o una ruta absoluta."
-            )
-
-        # Rutas relativas: se interpretan desde el cwd
-        abs_path = os.path.abspath(os.path.join(cwd, expanded))
-        if must_exist and not os.path.exists(abs_path):
-            return f"Error: la ruta no existe: {abs_path}"
-        return abs_path
-    except Exception as e:
-        return f"Error en resolve_path: {e}"
-
-
-# ---------------------------------------------------------------------------
-# File operations
-# ---------------------------------------------------------------------------
 
 def create_file(path: str, content: str = "") -> str:
     """
@@ -662,7 +491,7 @@ def create_file(path: str, content: str = "") -> str:
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. create_file deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. create_file deshabilitado."
         resolved = resolve_path(path, must_exist=False)
         if resolved.startswith("Error:"):
             return resolved
@@ -691,6 +520,10 @@ def read_file(path: str, max_chars: int = 80000) -> str:
         max_chars: Máximo de caracteres a devolver (el resto se trunca).
     """
     try:
+        if _read_only_mode():
+            # lectura permitida aunque esté read-only; esta rama se usa solo para mutaciones,
+            # pero mantenemos compatibilidad si el usuario lo activa.
+            pass
         resolved = resolve_path(path, must_exist=True)
         if resolved.startswith("Error:"):
             return resolved
@@ -712,6 +545,7 @@ def read_file(path: str, max_chars: int = 80000) -> str:
 def _read_file_cached(abs_path: str, max_chars: int) -> str:
     with open(abs_path, encoding="utf-8", errors="replace") as f:
         data = f.read(max_chars + 1)
+    # normalizamos para que el cache sea estable
     return data
 
 
@@ -725,7 +559,7 @@ def edit_file(path: str, new_content: str) -> str:
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. edit_file deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. edit_file deshabilitado."
         resolved = resolve_path(path, must_exist=True)
         if resolved.startswith("Error:"):
             return resolved
@@ -777,7 +611,7 @@ def search_replace_in_file(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. search_replace_in_file deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. search_replace_in_file deshabilitado."
         resolved = resolve_path(path, must_exist=True)
         if resolved.startswith("Error:"):
             return resolved
@@ -832,7 +666,7 @@ def create_folder(path: str) -> str:
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. create_folder deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. create_folder deshabilitado."
         resolved = resolve_path(path, must_exist=False)
         if resolved.startswith("Error:"):
             return resolved
@@ -898,6 +732,173 @@ def glob_find(pattern: str, root: str = ".") -> str:
         return text
     except Exception as e:
         return f"Error en glob: {e}"
+
+
+def resolve_path(path: str, cwd: Optional[str] = None, must_exist: bool = False) -> str:
+    """
+    Resuelve rutas “humanas” (por ejemplo `Documents`/`Documentos`) a rutas absolutas reales.
+
+    - Si el usuario pasa `Documents/...` se interpreta como `$HOME/Documents/...` (aunque el nombre real varíe).
+    - Si el usuario pasa una ruta absoluta (`/etc/...`) se respeta tal cual.
+    """
+    try:
+        if cwd is None:
+            cwd = os.getcwd()
+
+        raw = (path or "").strip()
+        if not raw:
+            return "Error: path vacío."
+
+        expanded = os.path.expanduser(raw)
+        if os.path.isabs(expanded):
+            abs_path = os.path.abspath(expanded)
+            if must_exist and not os.path.exists(abs_path):
+                return f"Error: la ruta no existe: {abs_path}"
+            return abs_path
+
+        home = Path.home().resolve()
+        tokens = [t for t in expanded.split("/") if t]
+        if not tokens:
+            return "Error: path inválido."
+
+        # Mapeo de alias comunes al home del usuario.
+        home_aliases: dict[str, list[str]] = {
+            _norm_text("documents"): ["Documents"],
+            _norm_text("documentos"): ["Documents"],
+            _norm_text("docs"): ["Documents"],
+            _norm_text("doc"): ["Documents"],
+            _norm_text("downloads"): ["Downloads"],
+            _norm_text("descargas"): ["Downloads"],
+            _norm_text("download"): ["Downloads"],
+            _norm_text("desktop"): ["Desktop"],
+            _norm_text("escritorio"): ["Desktop"],
+            _norm_text("music"): ["Music"],
+            _norm_text("musica"): ["Music"],
+            _norm_text("música"): ["Music"],
+            _norm_text("pictures"): ["Pictures", "Photos", "Images"],
+            _norm_text("photos"): ["Pictures", "Photos", "Images"],
+            _norm_text("images"): ["Pictures", "Photos", "Images"],
+            _norm_text("imagenes"): ["Pictures", "Photos", "Images"],
+            _norm_text("imágenes"): ["Pictures", "Photos", "Images"],
+            _norm_text("videos"): ["Videos"],
+            _norm_text("video"): ["Videos"],
+            _norm_text("public"): ["Public"],
+            _norm_text("público"): ["Public"],
+            _norm_text("publico"): ["Public"],
+        }
+
+        # Primero intentamos usar XDG user dirs (mapeo real del sistema).
+        xdg = _load_xdg_user_dirs()
+        alias_to_category: dict[str, str] = {
+            _norm_text("documents"): "documents",
+            _norm_text("documentos"): "documents",
+            _norm_text("docs"): "documents",
+            _norm_text("doc"): "documents",
+            _norm_text("downloads"): "downloads",
+            _norm_text("descargas"): "downloads",
+            _norm_text("download"): "downloads",
+            _norm_text("desktop"): "desktop",
+            _norm_text("escritorio"): "desktop",
+            _norm_text("music"): "music",
+            _norm_text("musica"): "music",
+            _norm_text("música"): "music",
+            _norm_text("pictures"): "pictures",
+            _norm_text("photos"): "pictures",
+            _norm_text("images"): "pictures",
+            _norm_text("imagenes"): "pictures",
+            _norm_text("imágenes"): "pictures",
+            _norm_text("videos"): "videos",
+            _norm_text("video"): "videos",
+            _norm_text("public"): "public",
+            _norm_text("público"): "public",
+            _norm_text("publico"): "public",
+        }
+
+        first_norm = _norm_text(tokens[0])
+        if first_norm in alias_to_category:
+            cat = alias_to_category[first_norm]
+            base_xdg = xdg.get(cat)
+            if base_xdg:
+                rest = "/".join(tokens[1:])
+                abs_path = os.path.abspath(os.path.join(base_xdg, rest)) if rest else os.path.abspath(base_xdg)
+                if must_exist and not os.path.exists(abs_path):
+                    return f"Error: la ruta no existe: {abs_path}"
+                return abs_path
+
+        if first_norm in home_aliases:
+            expected = home_aliases[first_norm]
+            entries = [p for p in home.iterdir() if p.is_dir()]
+
+            # 1) Match exacto ignorando case/acento.
+            for e in entries:
+                for exp in expected:
+                    if _norm_text(e.name) == _norm_text(exp):
+                        base_dir = e
+                        rest = "/".join(tokens[1:])
+                        abs_path = str((base_dir / rest).resolve()) if rest else str(base_dir)
+                        if must_exist and not os.path.exists(abs_path):
+                            return f"Error: la ruta no existe: {abs_path}"
+                        return abs_path
+
+            # 2) Fuzzy match entre carpetas candidatas del home.
+            expected_norm = [_norm_text(x) for x in expected]
+            best_score = 0.0
+            best_name: Optional[str] = None
+            scored_entries: list[tuple[float, str]] = []
+            for e in entries:
+                name_norm = _norm_text(e.name)
+                score = max(difflib.SequenceMatcher(None, name_norm, exp).ratio() for exp in expected_norm)
+                if score > best_score:
+                    best_score = score
+                    best_name = e.name
+                scored_entries.append((score, e.name))
+
+            if best_name and best_score >= 0.67:
+                base_dir = home / best_name
+                rest = "/".join(tokens[1:])
+                abs_path = str((base_dir / rest).resolve()) if rest else str(base_dir)
+                if must_exist and not os.path.exists(abs_path):
+                    return f"Error: la ruta no existe: {abs_path}"
+                return abs_path
+
+            if must_exist and scored_entries:
+                scored_entries.sort(key=lambda x: x[0], reverse=True)
+                top = scored_entries[:5]
+                candidates_json = [
+                    {
+                        "name": name,
+                        "score": score,
+                        "path": str((home / name).resolve()),
+                    }
+                    for score, name in top
+                ]
+                candidates = ", ".join([f"{name}({score:.2f})" for score, name in top])
+                return (
+                    f"Error: mapeo ambiguo para `{tokens[0]}`. "
+                    f"Candidatos en tu $HOME: {candidates}. "
+                    f"CANDIDATES_JSON={json.dumps(candidates_json, ensure_ascii=False)}. "
+                    "Repite usando el nombre exacto (o una ruta absoluta)."
+                )
+
+            # Si el usuario solo quiere crear, permitimos caer en el nombre canónico esperado.
+            if not must_exist:
+                base_dir = home / expected[0]
+                rest = "/".join(tokens[1:])
+                abs_path = os.path.abspath(str(base_dir / rest)) if rest else os.path.abspath(str(base_dir))
+                return abs_path
+
+            return (
+                f"Error: no pude mapear `{tokens[0]}` a una carpeta real en tu `$HOME`. "
+                "Usa una ruta con el nombre exacto o una ruta absoluta."
+            )
+
+        # Rutas relativas: se interpretan desde el cwd del proceso.
+        abs_path = os.path.abspath(os.path.join(cwd, expanded))
+        if must_exist and not os.path.exists(abs_path):
+            return f"Error: la ruta no existe: {abs_path}"
+        return abs_path
+    except Exception as e:
+        return f"Error en resolve_path: {e}"
 
 
 def exists_path(path: str, cwd: Optional[str] = None) -> str:
@@ -1045,55 +1046,37 @@ def disk_usage(path: str = "~") -> str:
         return f"Error en disk_usage: {e}"
 
 
-# ---------------------------------------------------------------------------
-# Process management (Windows)
-# ---------------------------------------------------------------------------
-
 def list_processes(limit: int = 30) -> str:
     """
-    Lista procesos del sistema usando psutil (multiplataforma).
+    Lista procesos visibles desde /proc con pid y cmdline (limitado).
     """
     try:
-        import psutil
         procs = []
-        for proc in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]):
-            try:
-                info = proc.info
-                procs.append({
-                    "pid": info["pid"],
-                    "name": (info["name"] or "")[:200],
-                    "cpu_percent": info.get("cpu_percent"),
-                    "memory_percent": round(info.get("memory_percent") or 0, 2),
-                })
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+        proc_dir = Path("/proc")
+        for pid_dir in proc_dir.iterdir():
+            if not pid_dir.name.isdigit():
                 continue
+            pid = int(pid_dir.name)
+            cmdline_file = pid_dir / "cmdline"
+            try:
+                raw = cmdline_file.read_bytes()
+                cmd = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace").strip()
+            except Exception:
+                cmd = ""
+            if not cmd:
+                # fallback: comm
+                try:
+                    cmd = (pid_dir / "comm").read_text(encoding="utf-8", errors="replace").strip()
+                except Exception:
+                    cmd = ""
+            procs.append({"pid": pid, "cmd": cmd[:300]})
             if len(procs) >= limit:
                 break
         procs.sort(key=lambda x: x["pid"])
         return json.dumps({"count": len(procs), "processes": procs}, ensure_ascii=False)
-    except ImportError:
-        # Fallback sin psutil: usar tasklist en Windows
-        try:
-            proc = subprocess.run(
-                ["tasklist", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, timeout=15,
-            )
-            lines = proc.stdout.strip().split("\n")[:limit]
-            procs = []
-            for line in lines:
-                parts = line.strip().strip('"').split('","')
-                if len(parts) >= 2:
-                    procs.append({"name": parts[0], "pid": parts[1]})
-            return json.dumps({"count": len(procs), "processes": procs}, ensure_ascii=False)
-        except Exception as e:
-            return f"Error en list_processes (fallback tasklist): {e}"
     except Exception as e:
         return f"Error en list_processes: {e}"
 
-
-# ---------------------------------------------------------------------------
-# File operations (continued)
-# ---------------------------------------------------------------------------
 
 def tail_file(path: str, lines: int = 200, max_bytes: int = 2_000_000) -> str:
     """
@@ -1106,12 +1089,15 @@ def tail_file(path: str, lines: int = 200, max_bytes: int = 2_000_000) -> str:
         p = Path(resolved)
         if not p.is_file():
             return f"Error: {p} no es un archivo."
+
+        # Estrategia simple: buscamos desde el final hacia atrás.
         with p.open("rb") as f:
             f.seek(0, os.SEEK_END)
             file_size = f.tell()
             back = min(file_size, max_bytes)
             f.seek(file_size - back, os.SEEK_SET)
             chunk = f.read(back)
+
         text = chunk.decode("utf-8", errors="replace")
         all_lines = text.splitlines()
         tail = all_lines[-lines:] if lines > 0 else all_lines
@@ -1128,6 +1114,7 @@ def count_dir_children_matches(
 ) -> str:
     """
     Cuenta coincidencias inmediatas (solo hijos de 1 nivel) para un glob_filter.
+    Útil para previsualizar `delete_path(..., recursive=true, glob_filter=...)`.
     """
     try:
         resolved = resolve_path(path, cwd=cwd, must_exist=True)
@@ -1180,42 +1167,23 @@ def validate_python_syntax(path: str) -> str:
         return f"Error en validate_python_syntax: {e}"
 
 
-# ---------------------------------------------------------------------------
-# Windows Services (equivalente a systemctl)
-# ---------------------------------------------------------------------------
-
-def _powershell_cmd() -> str:
-    """Detecta el ejecutable de PowerShell disponible."""
-    for cmd in ["pwsh", "powershell"]:
-        if shutil.which(cmd):
-            return cmd
-    return "powershell"
-
-
-def _run_powershell(script: str, timeout: int = 30) -> tuple[int, str, str]:
-    """Ejecuta un comando PowerShell y devuelve (returncode, stdout, stderr)."""
-    ps = _powershell_cmd()
-    proc = subprocess.run(
-        [ps, "-NoProfile", "-NonInteractive", "-Command", script],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env={**os.environ},
-    )
-    return proc.returncode, proc.stdout or "", proc.stderr or ""
-
-
 def service_status(service_name: str, allow_dangerous: bool = False) -> str:
     """
-    Consulta estado de un servicio de Windows con Get-Service.
+    Consulta estado de un servicio con systemctl.
     """
     try:
-        if not service_name or "\\" in service_name or "/" in service_name:
+        if not shutil.which("systemctl"):
+            return "Error: no existe `systemctl`."
+        if not service_name or "/" in service_name:
             return "Error: service_name inválido."
-        rc, stdout, stderr = _run_powershell(
-            f"Get-Service -Name '{service_name}' | Format-List Name,DisplayName,Status,StartType"
+        proc = subprocess.run(
+            ["systemctl", "status", service_name, "--no-pager"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={**os.environ},
         )
-        out = stdout + (("\n--- stderr ---\n" + stderr) if stderr else "")
+        out = (proc.stdout or "") + (("\n--- stderr ---\n" + proc.stderr) if proc.stderr else "")
         if len(out) > 12000:
             out = out[:12000] + "\n[…truncado…]"
         return out if out.strip() else "(sin salida)"
@@ -1230,20 +1198,27 @@ def service_restart(
     allow_dangerous: bool = False,
 ) -> str:
     """
-    Reinicia un servicio de Windows. Requiere confirm=true.
+    Reinicia un servicio. Requiere confirm=true.
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. service_restart deshabilitado."
-        if not service_name or "\\" in service_name or "/" in service_name:
+            return "Error: AARIS_READ_ONLY=true. service_restart deshabilitado."
+        if not shutil.which("systemctl"):
+            return "Error: no existe `systemctl`."
+        if not service_name or "/" in service_name:
             return "Error: service_name inválido."
         if not confirm and not allow_dangerous:
             return "Error: confirm=true requerido para service_restart."
-        rc, stdout, stderr = _run_powershell(
-            f"Restart-Service -Name '{service_name}' -Force -PassThru | Format-List Name,Status"
+        cmd = ["systemctl", "reload" if reload else "restart", service_name]
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={**os.environ},
         )
-        out = stdout + (("\n--- stderr ---\n" + stderr) if stderr else "")
-        exit_note = f"\n[código de salida: {rc}]"
+        out = (proc.stdout or "") + (("\n--- stderr ---\n" + proc.stderr) if proc.stderr else "")
+        exit_note = f"\n[código de salida: {proc.returncode}]"
         return (out if out.strip() else "(sin salida)") + exit_note
     except Exception as e:
         return f"Error en service_restart: {e}"
@@ -1255,22 +1230,28 @@ def service_wait_active(
     poll_interval_seconds: float = 1.0,
 ) -> str:
     """
-    Espera a que el servicio de Windows esté Running.
+    Espera a que el servicio esté activo (systemctl is-active).
     """
     try:
-        if not service_name:
+        if not shutil.which("systemctl"):
+            return "Error: no existe `systemctl`."
+        if not service_name or "/" in service_name:
             return "Error: service_name inválido."
         start = time.time()
         while True:
-            rc, stdout, stderr = _run_powershell(
-                f"(Get-Service -Name '{service_name}').Status"
+            proc = subprocess.run(
+                ["systemctl", "is-active", service_name],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env={**os.environ},
             )
-            status = stdout.strip()
-            if status.lower() == "running":
+            out = (proc.stdout or "").strip()
+            if out == "active":
                 health = service_health_report(service_name)
-                return f"OK service_wait_active: {service_name} está Running.\nHealth: {health}"
+                return f"OK service_wait_active: {service_name} está activo.\nHealth: {health}"
             if time.time() - start >= timeout_seconds:
-                return f"Error: timeout esperando Running. Estado actual: {status or '(desconocido)'}"
+                return f"Error: timeout esperando active. Estado actual: {out or '(desconocido)'}"
             time.sleep(poll_interval_seconds)
     except Exception as e:
         return f"Error en service_wait_active: {e}"
@@ -1278,22 +1259,38 @@ def service_wait_active(
 
 def service_health_report(service_name: str, allow_dangerous: bool = False) -> str:
     """
-    Devuelve un resumen estructurado del estado del servicio Windows.
+    Devuelve un resumen estructurado del estado del servicio.
     """
     try:
-        if not service_name:
+        if not shutil.which("systemctl"):
+            return "Error: no existe `systemctl`."
+        if not service_name or "/" in service_name:
             return "Error: service_name inválido."
-        rc, stdout, stderr = _run_powershell(
-            f"Get-Service -Name '{service_name}' | Select-Object Name,DisplayName,Status,StartType,CanStop,CanPauseAndContinue | ConvertTo-Json"
+        proc = subprocess.run(
+            [
+                "systemctl",
+                "show",
+                service_name,
+                "--property=ActiveState,SubState,Result,ExecMainStatus,NRestarts,MainPID",
+                "--no-page",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env={**os.environ},
         )
-        out = stdout + (("\n--- stderr ---\n" + stderr) if stderr else "")
-        if rc != 0:
+        out = (proc.stdout or "") + (("\n--- stderr ---\n" + proc.stderr) if proc.stderr else "")
+        if proc.returncode != 0:
             return "Error en service_health_report:\n" + out[:12000]
-        try:
-            report = json.loads(stdout)
-            return json.dumps({"service": service_name, "health": report}, ensure_ascii=False)
-        except Exception:
-            return json.dumps({"service": service_name, "raw": out[:2000]}, ensure_ascii=False)
+
+        report: dict[str, Any] = {}
+        for line in (proc.stdout or "").splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                report[k.strip()] = v.strip()
+        if not report:
+            return "Error: no pude leer propiedades de systemctl."
+        return json.dumps({"service": service_name, "health": report, "raw": out[:2000]}, ensure_ascii=False)
     except Exception as e:
         return f"Error en service_health_report: {e}"
 
@@ -1305,36 +1302,53 @@ def service_restart_with_deps(
     depth: int = 1,
 ) -> str:
     """
-    Reinicia un servicio Windows y sus servicios dependientes.
+    Reinicia un servicio y sus dependencias más cercanas (1 nivel por defecto).
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. service_restart_with_deps deshabilitado."
-        if not service_name:
+            return "Error: AARIS_READ_ONLY=true. service_restart_with_deps deshabilitado."
+        if not shutil.which("systemctl"):
+            return "Error: no existe `systemctl`."
+        if not service_name or "/" in service_name:
             return "Error: service_name inválido."
         if not confirm and not allow_dangerous:
             return "Error: confirm=true requerido para service_restart_with_deps."
 
-        # Obtener dependencias
-        rc, stdout, stderr = _run_powershell(
-            f"(Get-Service -Name '{service_name}').DependentServices | Select-Object -ExpandProperty Name"
-        )
-        deps = [d.strip() for d in stdout.strip().split("\n") if d.strip()]
+        # Solo consideramos units .service para evitar reinicios raros.
+        def _get_requires(prop: str) -> list[str]:
+            proc = subprocess.run(
+                ["systemctl", "show", service_name, f"-p{prop}", "--value", "--no-pager"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                env={**os.environ},
+            )
+            if proc.returncode != 0:
+                return []
+            raw = (proc.stdout or "").strip()
+            if not raw:
+                return []
+            units = [u.strip() for u in raw.replace(",", " ").split() if u.strip()]
+            return [u for u in units if u.endswith(".service")]
 
+        requires = _get_requires("Requires")
+        after = _get_requires("After")
+        deps = []
+        for u in requires + after:
+            if u not in deps and u != service_name:
+                deps.append(u)
+
+        # 1 nivel: reiniciamos primero dependencias.
         actions = []
-        for d in deps[:20]:
-            r = service_restart(d, confirm=True, allow_dangerous=allow_dangerous)
+        for d in deps[:50]:
+            r = service_restart(d, reload=False, confirm=True, allow_dangerous=allow_dangerous)
             actions.append(f"{d}: {r.splitlines()[0][:200]}")
 
-        main_res = service_restart(service_name, confirm=True, allow_dangerous=allow_dangerous)
+        main_res = service_restart(service_name, reload=False, confirm=True, allow_dangerous=allow_dangerous)
         return "OK service_restart_with_deps.\nDeps:\n- " + "\n- ".join(actions) + f"\nMain:\n{main_res[:12000]}"
     except Exception as e:
         return f"Error en service_restart_with_deps: {e}"
 
-
-# ---------------------------------------------------------------------------
-# Project detection
-# ---------------------------------------------------------------------------
 
 def detect_project(root: str = ".") -> str:
     """
@@ -1363,9 +1377,6 @@ def detect_project(root: str = ".") -> str:
         if _has("go.mod"):
             project_type = "go"
             markers.append("go.mod")
-        if _has(".sln") or any((r / f).exists() for f in r.glob("*.csproj")):
-            project_type = "dotnet"
-            markers.append(".sln or .csproj")
         if _has("docker-compose.yml") or _has("Dockerfile"):
             markers.extend([m for m in ["docker-compose.yml", "Dockerfile"] if _has(m)])
 
@@ -1378,6 +1389,7 @@ def detect_project(root: str = ".") -> str:
 def project_workflow_suggest(root: str = ".", include_commands: bool = True) -> str:
     """
     Sugiere un pipeline típico según el tipo de proyecto.
+    No ejecuta nada: solo devuelve pasos recomendados para que el agente los orqueste.
     """
     try:
         info_raw = detect_project(root)
@@ -1398,7 +1410,10 @@ def project_workflow_suggest(root: str = ".", include_commands: bool = True) -> 
                 "Revisar linting si existe (ruff/flake8).",
                 "Aplicar cambios y verificar de nuevo.",
             ]
-            cmds = ["python -m compileall .", "python -m pytest -q"]
+            cmds = [
+                "python -m compileall .",
+                "python -m pytest -q",
+            ]
         elif ptype == "node":
             steps = [
                 "Instalar dependencias (npm/pnpm/yarn según existan).",
@@ -1406,22 +1421,20 @@ def project_workflow_suggest(root: str = ".", include_commands: bool = True) -> 
                 "Validar build (si existe).",
                 "Aplicar cambios y verificar nuevamente.",
             ]
-            cmds = ["npm test", "npm run lint"]
-        elif ptype == "dotnet":
-            steps = [
-                "Restaurar dependencias (dotnet restore).",
-                "Compilar (dotnet build).",
-                "Ejecutar tests (dotnet test).",
-                "Aplicar cambios y recompilar.",
+            cmds = [
+                "npm test",
+                "npm run lint",
             ]
-            cmds = ["dotnet restore", "dotnet build", "dotnet test"]
         elif ptype == "rust":
             steps = [
                 "Compilar (cargo build) y ejecutar tests (cargo test).",
                 "Revisar clippy si existe.",
                 "Aplicar cambios y volver a compilar.",
             ]
-            cmds = ["cargo test", "cargo clippy"]
+            cmds = [
+                "cargo test",
+                "cargo clippy",
+            ]
         else:
             steps = [
                 "Determinar dependencias y comandos disponibles en el repo.",
@@ -1440,10 +1453,6 @@ def project_workflow_suggest(root: str = ".", include_commands: bool = True) -> 
     except Exception as e:
         return f"Error en project_workflow_suggest: {e}"
 
-
-# ---------------------------------------------------------------------------
-# Search / RAG
-# ---------------------------------------------------------------------------
 
 def fuzzy_search_paths(
     query: str,
@@ -1487,10 +1496,10 @@ def fuzzy_search_paths(
 
         scored.sort(key=lambda x: x[0], reverse=True)
         top = scored[:max_results]
-        line_list = [f"{s:.3f} {path}" for s, path in top]
-        if not line_list:
+        lines = [f"{s:.3f} {path}" for s, path in top]
+        if not lines:
             return "Sin coincidencias relevantes."
-        return "\n".join(line_list)
+        return "\n".join(lines)
     except Exception as e:
         return f"Error en fuzzy_search_paths: {e}"
 
@@ -1507,14 +1516,15 @@ def build_text_index(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. build_text_index deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. build_text_index deshabilitado."
+
         resolved_root = resolve_path(root, must_exist=True)
         if resolved_root.startswith("Error:"):
             return resolved_root
         base = Path(resolved_root).resolve()
 
         if index_path is None:
-            index_path = os.path.join(os.getcwd(), ".jarvis", "rag_text_index.json")
+            index_path = os.path.join(os.getcwd(), ".aaris", "rag_text_index.json")
         index_path = os.path.abspath(os.path.expanduser(index_path))
         Path(os.path.dirname(index_path)).mkdir(parents=True, exist_ok=True)
 
@@ -1545,12 +1555,14 @@ def build_text_index(
                 mtime = 0.0
                 size = 0
 
-            entries.append({
-                "path": str(p),
-                "size": size,
-                "mtime": mtime,
-                "text_excerpt": text,
-            })
+            entries.append(
+                {
+                    "path": str(p),
+                    "size": size,
+                    "mtime": mtime,
+                    "text_excerpt": text,
+                }
+            )
             count += 1
 
         payload = {
@@ -1580,7 +1592,7 @@ def rag_query(
         if not query or not query.strip():
             return "Error: query vacía."
         if index_path is None:
-            index_path = os.path.join(os.getcwd(), ".jarvis", "rag_text_index.json")
+            index_path = os.path.join(os.getcwd(), ".aaris", "rag_text_index.json")
         index_path = os.path.abspath(os.path.expanduser(index_path))
         if not os.path.isfile(index_path):
             return "Error: no existe el índice. Ejecuta build_text_index primero."
@@ -1611,46 +1623,61 @@ def rag_query(
         return f"Error en rag_query: {e}"
 
 
-# ---------------------------------------------------------------------------
-# Templates
-# ---------------------------------------------------------------------------
-
 def apply_template(template_name: str, destination: str, context_json: str = "{}") -> str:
     """
     Crea un archivo desde una plantilla embebida.
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. apply_template deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. apply_template deshabilitado."
         ctx = json.loads(context_json or "{}")
         if not isinstance(ctx, dict):
             ctx = {}
 
         template_dir = os.environ.get(
-            "JARVIS_TEMPLATE_DIR",
-            os.path.join(os.path.expanduser("~"), ".jarvis", "templates"),
+            "AARIS_TEMPLATE_DIR",
+            os.path.join(os.path.expanduser("~"), ".aaris", "templates"),
         )
         template_dir = os.path.abspath(os.path.expanduser(template_dir))
 
         templates: dict[str, str] = {
             "python_script": (
                 "#!/usr/bin/env python3\n"
-                '"""{{title}}"""\n\n'
+                "\"\"\"{{title}}\"\"\"\n\n"
                 "def main():\n"
-                '    print("{{message}}")\n\n'
-                'if __name__ == "__main__":\n'
+                "    print(\"{{message}}\")\n\n"
+                "if __name__ == \"__main__\":\n"
                 "    main()\n"
             ),
-            "powershell_script": (
-                "# {{title}}\n"
-                "# Generado por JARVIS\n\n"
+            "systemd_service": (
+                "[Unit]\n"
+                "Description={{description}}\n"
+                "After=network.target\n\n"
+                "[Service]\n"
+                "Type=simple\n"
+                "User={{user}}\n"
+                "WorkingDirectory={{workdir}}\n"
+                "ExecStart={{execstart}}\n"
+                "Restart=always\n\n"
+                "[Install]\n"
+                "WantedBy=multi-user.target\n"
+            ),
+            "systemd_timer": (
+                "[Unit]\n"
+                "Description={{description}}\n\n"
+                "[Timer]\n"
+                "OnCalendar={{oncalendar}}\n"
+                "Persistent=true\n\n"
+                "[Install]\n"
+                "WantedBy=timers.target\n"
+            ),
+            "bash_script": (
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n\n"
                 "{{body}}\n"
             ),
-            "batch_script": (
-                "@echo off\n"
-                "REM {{title}}\n"
-                "REM Generado por JARVIS\n\n"
-                "{{body}}\n"
+            "cron_entry": (
+                "{{minute}} {{hour}} {{day_of_month}} {{month}} {{day_of_week}} {{command}}\n"
             ),
             "readme": (
                 "# {{title}}\n\n"
@@ -1658,6 +1685,7 @@ def apply_template(template_name: str, destination: str, context_json: str = "{}
             ),
         }
 
+        # Si existe plantilla externa, la usamos primero.
         external_content: Optional[str] = None
         for candidate in [template_name, f"{template_name}.tpl", f"{template_name}.txt"]:
             p = Path(template_dir) / candidate
@@ -1681,6 +1709,7 @@ def apply_template(template_name: str, destination: str, context_json: str = "{}
         for k, v in ctx.items():
             content = content.replace("{{" + str(k) + "}}", str(v))
 
+        # Creamos directorios padre y escribimos.
         parent = os.path.dirname(resolved_dest)
         if parent:
             os.makedirs(parent, exist_ok=True)
@@ -1691,17 +1720,13 @@ def apply_template(template_name: str, destination: str, context_json: str = "{}
         return f"Error en apply_template: {e}"
 
 
-# ---------------------------------------------------------------------------
-# Append / Insert
-# ---------------------------------------------------------------------------
-
 def append_file(path: str, content: str) -> str:
     """
     Añade contenido al final de un archivo (crea directorios padre).
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. append_file deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. append_file deshabilitado."
         resolved = resolve_path(path, must_exist=False)
         if resolved.startswith("Error:"):
             return resolved
@@ -1709,6 +1734,7 @@ def append_file(path: str, content: str) -> str:
         parent = os.path.dirname(abs_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
+        # Para symlinks existentes, evitamos escapar del home.
         if os.path.isfile(abs_path):
             sym_err = _validate_symlink_for_path(abs_path, allow_escape=_allow_symlink_escape())
             if sym_err:
@@ -1734,7 +1760,7 @@ def insert_after(path: str, anchor_text: str, insert_text: str, occurrence_index
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. insert_after deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. insert_after deshabilitado."
         resolved = resolve_path(path, must_exist=True)
         if resolved.startswith("Error:"):
             return resolved
@@ -1775,17 +1801,13 @@ def insert_after(path: str, anchor_text: str, insert_text: str, occurrence_index
         return f"Error en insert_after: {e}"
 
 
-# ---------------------------------------------------------------------------
-# Copy / Move / Delete
-# ---------------------------------------------------------------------------
-
 def _ensure_in_home_or_allow(target: Path, allow_dangerous: bool, action: str) -> Optional[str]:
     home = Path.home().resolve()
     if _is_relative_to(target, home):
         return None
     if allow_dangerous:
         return None
-    return f"Error: {action} fuera de tu perfil requiere allow_dangerous=true."
+    return f"Error: {action} fuera de tu home requiere allow_dangerous=true."
 
 
 def copy_path(from_path: str, to_path: str, overwrite: bool = False, allow_dangerous: bool = False) -> str:
@@ -1794,7 +1816,7 @@ def copy_path(from_path: str, to_path: str, overwrite: bool = False, allow_dange
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. copy_path deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. copy_path deshabilitado."
         src = Path(resolve_path(from_path, must_exist=True))
         dst = Path(resolve_path(to_path, must_exist=False))
         if src.is_symlink():
@@ -1807,8 +1829,10 @@ def copy_path(from_path: str, to_path: str, overwrite: bool = False, allow_dange
         err = _ensure_in_home_or_allow(dst, allow_dangerous, "copy_path (destino)")
         if err:
             return err
+
         if dst.exists() and not overwrite:
             return f"Error: el destino ya existe: {dst}. Usa overwrite=true."
+
         dst.parent.mkdir(parents=True, exist_ok=True)
         if src.is_dir():
             shutil.copytree(str(src), str(dst), dirs_exist_ok=overwrite)
@@ -1825,7 +1849,7 @@ def move_path(from_path: str, to_path: str, overwrite: bool = False, allow_dange
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. move_path deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. move_path deshabilitado."
         src = Path(resolve_path(from_path, must_exist=True))
         dst = Path(resolve_path(to_path, must_exist=False))
         if src.is_symlink():
@@ -1838,13 +1862,16 @@ def move_path(from_path: str, to_path: str, overwrite: bool = False, allow_dange
         err = _ensure_in_home_or_allow(dst, allow_dangerous, "move_path (destino)")
         if err:
             return err
+
         if dst.exists():
             if not overwrite:
                 return f"Error: el destino ya existe: {dst}. Usa overwrite=true."
+            # Eliminamos destino para permitir el movimiento.
             if dst.is_dir():
                 shutil.rmtree(str(dst))
             else:
                 dst.unlink()
+
         token = _create_move_backup(src, dst)
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
@@ -1854,24 +1881,38 @@ def move_path(from_path: str, to_path: str, overwrite: bool = False, allow_dange
 
 
 def _trash_enabled() -> bool:
-    val = os.environ.get("JARVIS_USE_TRASH", "true").strip().lower()
+    val = os.environ.get("AARIS_USE_TRASH", "true").strip().lower()
     return val not in ("0", "false", "no", "off")
 
 
 def _trash_move(target: Path) -> str:
     """
-    Mueve la ruta a la Papelera de Reciclaje de Windows usando send2trash.
+    Mueve la ruta al directorio de papelera estándar (XDG Trash).
+    Retorna un mensaje; si falla, lanza excepción para que el llamador haga fallback.
     """
-    try:
-        import send2trash
-        abs_path = str(target.resolve())
-        send2trash.send2trash(abs_path)
-        return abs_path
-    except ImportError:
-        raise RuntimeError(
-            "send2trash no está instalado. "
-            "Instala con: pip install send2trash"
-        )
+    trash_base = Path.home().resolve() / ".local" / "share" / "Trash"
+    files_dir = trash_base / "files"
+    info_dir = trash_base / "info"
+    files_dir.mkdir(parents=True, exist_ok=True)
+    info_dir.mkdir(parents=True, exist_ok=True)
+
+    original_path = str(target.resolve())
+    uid = uuid.uuid4().hex
+    dest_name = f"{target.name}.{uid}"
+    dest = files_dir / dest_name
+
+    shutil.move(str(target), str(dest))
+
+    deletion_date = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+    # Formato .trashinfo (simplificado pero compatible).
+    info_text = (
+        "[Trash Info]\n"
+        f"Path={original_path}\n"
+        f"DeletionDate={deletion_date}\n"
+    )
+    info_file = info_dir / f"{dest_name}.trashinfo"
+    info_file.write_text(info_text, encoding="utf-8")
+    return str(dest)
 
 
 def delete_path(
@@ -1886,12 +1927,11 @@ def delete_path(
     Borra un archivo o carpeta.
 
     - Para carpetas usa `recursive=true`.
-    - Para carpetas (y para cosas fuera del perfil) exige `confirm=true` y/o `allow_dangerous=true`.
-    - Con Papelera activa (por defecto), los archivos van a la Papelera de Reciclaje de Windows.
+    - Para carpetas (y para cosas fuera de tu home) exige `confirm=true` y/o `allow_dangerous=true`.
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. delete_path deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. delete_path deshabilitado."
         resolved = resolve_path(path, must_exist=True)
         if resolved.startswith("Error:"):
             return resolved
@@ -1904,17 +1944,14 @@ def delete_path(
         if _policy_require_confirm("delete_path") and not confirm and not allow_dangerous:
             return "Error: política requiere confirm=true para delete_path."
 
-        # Rutas protegidas de Windows
-        protected = [
-            os.environ.get("SystemRoot", "C:\\Windows"),
-            os.environ.get("ProgramFiles", "C:\\Program Files"),
-            os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
-        ]
-        for prot in protected:
-            if str(target).lower().startswith(prot.lower()):
-                return f"Error: no se permite borrar rutas del sistema: {target}"
+        # Evita accidentes catastróficos.
+        if str(target) == "/":
+            return "Error: no se permite borrar `/`."
 
-        min_entries_for_confirm = int(os.environ.get("JARVIS_DELETE_CONFIRM_MIN_ENTRIES", "200"))
+        min_bytes_for_confirm = int(os.environ.get("AARIS_DELETE_CONFIRM_MIN_BYTES", "50000000"))
+        min_entries_for_confirm = int(os.environ.get("AARIS_DELETE_CONFIRM_MIN_ENTRIES", "200"))
+        sensitive_dir_names = {".ssh", ".gnupg", ".kube", ".kubernetes"}
+        sensitive_file_names = {".bashrc", ".zshrc", ".profile", ".bash_profile", ".gitconfig", ".config"}
 
         def _maybe_require_confirm(reason: str) -> Optional[str]:
             if confirm:
@@ -1928,16 +1965,18 @@ def delete_path(
             if not recursive:
                 return f"Error: {target} es un directorio. Usa `recursive=true`."
             if not _is_relative_to(target, home) and not allow_dangerous:
-                return "Error: borrar directorios fuera de tu perfil requiere `allow_dangerous=true`."
+                return "Error: borrar directorios fuera de tu home requiere `allow_dangerous=true`."
 
+            # Confirmación estricta: cualquier borrado recursivo requiere confirm=true.
             if not confirm:
                 return (
                     f"Confirmación requerida: vas a borrar recursivamente `{target}`. "
                     "Repite la petición con `confirm=true`."
                 )
 
+            # Selección segura para directorios grandes (si no se especifica filtro).
             effective_threshold = max_entries if max_entries is not None else int(
-                os.environ.get("JARVIS_DELETE_LARGE_DIR_MAX_ENTRIES", "2000")
+                os.environ.get("AARIS_DELETE_LARGE_DIR_MAX_ENTRIES", "2000")
             )
             if glob_filter is None and effective_threshold > 0:
                 immediate = 0
@@ -1954,6 +1993,7 @@ def delete_path(
                         "Usa una subruta más específica o pasa `glob_filter` para borrar solo partes."
                     )
 
+            # Si hay filtro, borramos recursivamente SOLO los hijos inmediatos que coincidan.
             if glob_filter:
                 matches: list[Path] = []
                 for child in target.iterdir():
@@ -1963,21 +2003,22 @@ def delete_path(
                     return f"Sin coincidencias para glob_filter={glob_filter!r} en {target}."
 
                 if _trash_enabled():
-                    sent = 0
+                    moved = []
                     tokens: list[str] = []
                     for m in matches:
                         try:
                             original = m.resolve()
-                            _trash_move(m)
-                            sent += 1
-                            tokens.append(_create_trash_backup(original, "papelera"))
+                            moved_dest = _trash_move(m)
+                            moved.append(moved_dest)
+                            tokens.append(_create_trash_backup(original, Path(moved_dest)))
                         except Exception:
+                            # Fallback permanente por cada entrada.
                             if m.is_dir():
                                 shutil.rmtree(str(m))
                             else:
                                 m.unlink()
                     tok_part = f" ROLLBACK_TOKENS={','.join(tokens)}" if tokens else ""
-                    return f"Entrada(s) movida(s) a Papelera: {sent}.{tok_part}"
+                    return f"Entrada(s) movida(s) a Trash: {len(moved)}.{tok_part}"
                 else:
                     for m in matches:
                         if m.is_dir():
@@ -1986,39 +2027,55 @@ def delete_path(
                             m.unlink()
                     return f"Entrada(s) eliminada(s): {len(matches)}"
 
-            # Sin filtro: eliminar todo
+            # Sin filtro: eliminamos todo (a Trash si está activo).
             if _trash_enabled():
                 try:
                     original = target.resolve()
-                    _trash_move(target)
-                    token = _create_trash_backup(original, "papelera")
-                    return f"Directorio movido a Papelera: {target}. ROLLBACK_TOKEN={token}"
+                    dest = _trash_move(target)
+                    token = _create_trash_backup(original, Path(dest))
+                    return f"Directorio movido a Trash: {dest}. ROLLBACK_TOKEN={token}"
                 except Exception:
+                    # Fallback permanente.
                     shutil.rmtree(str(target))
                     return f"Directorio eliminado: {target}"
 
             shutil.rmtree(str(target))
             return f"Directorio eliminado: {target}"
 
-        # Archivo
+        # Archivo (o enlace).
         if not target.exists():
             return f"Error: la ruta no existe: {target}"
+
         if not _is_relative_to(target, home) and not allow_dangerous:
-            return "Error: borrar archivos fuera de tu perfil requiere `allow_dangerous=true`."
+            return "Error: borrar archivos fuera de tu home requiere `allow_dangerous=true`."
 
         if not confirm:
             name = target.name
+            parent = target.parent.name
+            try:
+                size = target.lstat().st_size
+            except Exception:
+                size = 0
+
+            if parent in sensitive_dir_names or name in sensitive_file_names:
+                msg = _maybe_require_confirm(f"es un archivo sensible (`{parent}/{name}`)")
+                if msg:
+                    return msg
             if name.startswith("."):
                 msg = _maybe_require_confirm(f"es un archivo oculto (`{name}`)")
+                if msg:
+                    return msg
+            if size >= min_bytes_for_confirm:
+                msg = _maybe_require_confirm(f"es grande (>= {min_bytes_for_confirm} bytes)")
                 if msg:
                     return msg
 
         if _trash_enabled():
             try:
                 original = target.resolve()
-                _trash_move(target)
-                token = _create_trash_backup(original, "papelera")
-                return f"Archivo movido a Papelera: {target}. ROLLBACK_TOKEN={token}"
+                dest = _trash_move(target)
+                token = _create_trash_backup(original, Path(dest))
+                return f"Archivo movido a Trash: {dest}. ROLLBACK_TOKEN={token}"
             except Exception:
                 target.unlink()
                 return f"Archivo eliminado: {target}"
@@ -2030,51 +2087,84 @@ def delete_path(
         return f"Error en delete_path: {e}"
 
 
-# ---------------------------------------------------------------------------
-# Command execution (Windows)
-# ---------------------------------------------------------------------------
-
 def run_command(
     command: str,
     cwd: Optional[str] = None,
     timeout_seconds: int = 120,
     max_output_chars: int = 24000,
     allow_dangerous: bool = False,
-    shell: str = "auto",
 ) -> str:
     """
-    Ejecuta un comando en Windows. Soporta PowerShell y cmd.
+    Ejecuta un comando de shell en Linux. Usar con cuidado: el usuario es responsable de lo que ejecuta.
 
     Args:
-        command: Comando completo.
+        command: Comando completo (como en una terminal).
         cwd: Directorio de trabajo; None = directorio actual del asistente.
         timeout_seconds: Tiempo máximo de ejecución.
         max_output_chars: Límite de salida combinada (stdout+stderr).
-        allow_dangerous: Si False, bloquea heurísticamente comandos destructivos.
-        shell: "auto" (detecta), "powershell", "cmd", o "bash" (WSL).
+        allow_dangerous: Si False, bloquea heurísticamente comandos potencialmente destructivos.
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. run_command deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. run_command deshabilitado."
 
         if not allow_dangerous:
+            # Heurísticas para evitar ejecutar borrados/reescrituras masivas sin confirmación explícita.
             dangerous_patterns = [
-                r"\bRemove-Item\b.*-Recurse\b.*-Force\b",
-                r"\brd\s+/s\s+/q\b",
-                r"\bdel\s+/s\s+/q\b",
-                r"\bformat\s+[a-zA-Z]:\b",
-                r"\bshutdown\b",
-                r"\brestart-computer\b",
-                r"\bstop-computer\b",
-                r"\brm\s+-rf\b",  # si se usa WSL
+                r"\brm\s+-rf\b",
+                r"\brm\s+-r[f]?\b",
                 r"\bdd\s+if=",
+                r"\bmkfs\w*\b",
+                r"\bshutdown\b",
+                r"\breboot\b",
+                r"\bpoweroff\b",
+                r"\bhalt\b",
+                r"\bkillall\b.*\b-9\b",
+                r"\bkill\s+-9\b.*\b-1\b",
+                r"\b:(){\s*:|\s*&};\s*:",
+                r"\bxargs\b.*\brm\b",
             ]
             for pat in dangerous_patterns:
-                if re.search(pat, command, re.IGNORECASE):
+                if re.search(pat, command):
                     return (
                         "Error: comando potencialmente destructivo detectado. "
-                        "Para ejecutarlo, repite con `allow_dangerous=true`."
+                        "Para ejecutarlo de todos modos, repite la petición haciendo que el agente llame a "
+                        "`run_command(..., allow_dangerous=true)`."
                     )
+
+        allowlist_only = os.environ.get("AARIS_COMMAND_ALLOWLIST_ONLY", "false").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "si",
+            "sí",
+            "on",
+        )
+        if allowlist_only:
+            allowlist_raw = os.environ.get(
+                "AARIS_COMMAND_ALLOWLIST",
+                "ls,cat,head,tail,stat,du,df,rg,systemctl,journalctl,ps,pwd,echo,whoami",
+            )
+            allowed = {x.strip() for x in allowlist_raw.split(",") if x.strip()}
+            cmd = (command or "").strip()
+            if cmd.startswith("sudo "):
+                cmd = cmd[len("sudo ") :].lstrip()
+            # Cuando usamos allowlist_only, bloqueamos redirecciones/tuberías/comandos compuestos.
+            disallowed_chars = ["|", ";", "&&", "||", ">", "<", "\n", "\r", "`", "$(", "&"]
+            for token in disallowed_chars:
+                if token in cmd:
+                    return "Error: AARIS_COMMAND_ALLOWLIST_ONLY no permite operadores de shell (tuberías/redirecciones/composición)."
+            parts = cmd.split()
+            first = parts[0] if parts else ""
+            second = parts[1] if len(parts) > 1 else ""
+            # Reglas simples para herramientas comunes.
+            if first == "systemctl" and second not in ("status", "show"):
+                return "Error: AARIS_COMMAND_ALLOWLIST_ONLY. systemctl restringido a status/show."
+            if first == "journalctl" and second and not second.startswith("--since"):
+                # No bloqueamos demasiado: pero restringimos el primer argumento.
+                pass
+            if first and first not in allowed:
+                return f"Error: AARIS_COMMAND_ALLOWLIST_ONLY. comando no permitido: {first}"
 
         if cwd:
             resolved_cwd = resolve_path(cwd, must_exist=True)
@@ -2085,37 +2175,21 @@ def run_command(
             work = None
         if work and not os.path.isdir(work):
             return f"Error: cwd no es un directorio: {work}"
-
-        # Detectar shell
-        s = (shell or "auto").strip().lower()
-        if s == "auto":
-            # PowerShell por defecto en Windows, bash si no es Windows
-            if _is_windows():
-                s = "powershell"
-            else:
-                s = "bash"
-
-        if s == "powershell":
-            ps = _powershell_cmd()
+        sandbox_mode = os.environ.get("AARIS_COMMAND_SANDBOX", "").strip().lower()
+        if sandbox_mode == "firejail":
+            if not shutil.which("firejail"):
+                return "Error: AARIS_COMMAND_SANDBOX=firejail pero `firejail` no está instalado."
+            # Ejecutamos dentro de firejail sin red y con home privado.
             proc = subprocess.run(
-                [ps, "-NoProfile", "-NonInteractive", "-Command", command],
+                ["firejail", "--quiet", "--net=none", "--private-home", "sh", "-lc", command],
+                shell=False,
                 cwd=work,
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
                 env={**os.environ},
             )
-        elif s == "cmd":
-            proc = subprocess.run(
-                ["cmd", "/c", command],
-                cwd=work,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                env={**os.environ},
-            )
-        elif s == "bash":
-            # WSL o git-bash
+        else:
             proc = subprocess.run(
                 command,
                 shell=True,
@@ -2125,9 +2199,6 @@ def run_command(
                 timeout=timeout_seconds,
                 env={**os.environ},
             )
-        else:
-            return f"Error: shell no soportado: {s}"
-
         out = ""
         if proc.stdout:
             out += proc.stdout
@@ -2149,19 +2220,24 @@ def run_command_checked(
     timeout_seconds: int = 120,
     max_output_chars: int = 24000,
     allow_dangerous: bool = False,
-    shell: str = "auto",
 ) -> str:
     """
-    Ejecuta comando y devuelve JSON con returncode/stdout/stderr.
+    Ejecuta comando y devuelve JSON con returncode/stdout/stderr (útil para loops/criterios).
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. run_command_checked deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. run_command_checked deshabilitado."
+
+        # Reutilizamos run_command para respetar heurísticas y sandbox.
         out = run_command(
-            command=command, cwd=cwd, timeout_seconds=timeout_seconds,
-            max_output_chars=max_output_chars, allow_dangerous=allow_dangerous,
-            shell=shell,
+            command=command,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            max_output_chars=max_output_chars,
+            allow_dangerous=allow_dangerous,
         )
+        # run_command incluye el returncode al final en la forma:
+        # \n[código de salida: N]
         m = re.search(r"\[código de salida:\s*(-?\d+)\]$", out.strip())
         returncode = int(m.group(1)) if m else None
         return json.dumps({"command": command, "returncode": returncode, "output": out}, ensure_ascii=False)
@@ -2177,7 +2253,6 @@ def run_command_retry(
     timeout_seconds: int = 120,
     max_output_chars: int = 12000,
     allow_dangerous: bool = False,
-    shell: str = "auto",
 ) -> str:
     """
     Ejecuta un comando varias veces hasta éxito (returncode==0) o agotar intentos.
@@ -2188,9 +2263,11 @@ def run_command_retry(
         last = None
         for i in range(1, attempts + 1):
             res = run_command_checked(
-                command=command, cwd=cwd, timeout_seconds=timeout_seconds,
-                max_output_chars=max_output_chars, allow_dangerous=allow_dangerous,
-                shell=shell,
+                command=command,
+                cwd=cwd,
+                timeout_seconds=timeout_seconds,
+                max_output_chars=max_output_chars,
+                allow_dangerous=allow_dangerous,
             )
             last = res
             try:
@@ -2201,21 +2278,20 @@ def run_command_retry(
             except Exception:
                 pass
             if i < attempts:
+                import time
+
                 time.sleep(delay_seconds)
         return json.dumps({"attempts": attempts, "last_result": json.loads(last) if last else None}, ensure_ascii=False)
     except Exception as e:
         return f"Error en run_command_retry: {e}"
 
 
-# ---------------------------------------------------------------------------
-# Package management (Windows: winget, chocolatey, scoop)
-# ---------------------------------------------------------------------------
-
 def _sanitize_pkg_token(token: str) -> Optional[str]:
     t = (token or "").strip()
     if not t:
         return None
-    if not re.match(r"^[a-zA-Z0-9+._:\-/]+$", t):
+    # Paquetes típicamente usan [a-zA-Z0-9+._-]
+    if not re.match(r"^[a-zA-Z0-9+._:-]+$", t):
         return None
     return t
 
@@ -2230,15 +2306,15 @@ def install_packages(
     allow_dangerous: bool = False,
 ) -> str:
     """
-    Instala paquetes en Windows de forma segura.
+    Instala paquetes del sistema de forma segura (bloquea en modo read-only).
 
     - `packages`: lista separada por comas/espacios.
-    - `manager`: "auto" (detecta winget/choco/scoop), "winget", "choco", "scoop".
-    - `confirm`: requerido para la instalación.
+    - `confirm`: requerido cuando `update=true` o cuando el modo del sistema lo exija.
+    - `allow_dangerous`: si true, permite operaciones más agresivas.
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. install_packages deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. install_packages deshabilitado."
 
         tokens = [t.strip() for t in (packages or "").replace(";", ",").replace("|", ",").split(",")]
         tokens = [t for t in tokens if t]
@@ -2254,75 +2330,59 @@ def install_packages(
             return "Error: no pude parsear tokens de paquetes válidos."
 
         if not confirm and (update or not allow_dangerous):
-            return "Error: confirm=true requerido para install_packages."
+            return "Error: confirm=true requerido para install_packages (especialmente si update=true)."
 
         m = (manager or "auto").strip().lower()
         if m == "auto":
-            if shutil.which("winget"):
-                m = "winget"
-            elif shutil.which("choco"):
-                m = "choco"
-            elif shutil.which("scoop"):
-                m = "scoop"
+            if shutil.which("pacman"):
+                m = "pacman"
             elif shutil.which("apt-get"):
-                m = "apt"  # WSL fallback
+                m = "apt"
+            elif shutil.which("dnf"):
+                m = "dnf"
+            elif shutil.which("yum"):
+                m = "yum"
             else:
-                return "Error: no detecté un gestor de paquetes soportado (winget/choco/scoop)."
+                return "Error: no detecté un gestor de paquetes soportado (pacman/apt/dnf/yum)."
 
-        if m == "winget":
+        sudo_prefix: list[str] = ["sudo"] if use_sudo else []
+        if m == "pacman":
+            cmds: list[list[str]] = []
+            if update:
+                cmds.append(sudo_prefix + ["pacman", "-Sy", "--noconfirm"])
+            cmd_install = sudo_prefix + ["pacman", "-S", "--noconfirm"] + pkg_tokens
+            cmds.append(cmd_install)
             outputs = []
-            for pkg in pkg_tokens:
-                cmd = ["winget", "install", "--id", pkg, "--accept-package-agreements", "--accept-source-agreements"]
-                if assume_yes:
-                    cmd.append("--silent")
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env={**os.environ})
-                outputs.append(proc.stdout + (("\n--- stderr ---\n" + proc.stderr) if proc.stderr else ""))
-                if proc.returncode != 0 and "already installed" not in (proc.stdout or "").lower():
-                    return "Error install_packages winget:\n" + "\n".join(outputs)
-            return "OK install_packages winget.\n" + "\n".join(outputs)[:24000]
-
-        if m == "choco":
-            cmd = ["choco", "install"] + pkg_tokens
-            if assume_yes:
-                cmd.append("-y")
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env={**os.environ})
-            out = proc.stdout + (("\n--- stderr ---\n" + proc.stderr) if proc.stderr else "")
-            if proc.returncode != 0:
-                return "Error install_packages choco:\n" + out[:24000]
-            return "OK install_packages choco.\n" + out[:24000]
-
-        if m == "scoop":
-            outputs = []
-            for pkg in pkg_tokens:
-                proc = subprocess.run(
-                    ["scoop", "install", pkg],
-                    capture_output=True, text=True, timeout=600, env={**os.environ},
-                )
+            for c in cmds:
+                proc = subprocess.run(c, capture_output=True, text=True, timeout=900, env={**os.environ})
                 outputs.append(proc.stdout + (("\n--- stderr ---\n" + proc.stderr) if proc.stderr else ""))
                 if proc.returncode != 0:
-                    return "Error install_packages scoop:\n" + "\n".join(outputs)
-            return "OK install_packages scoop.\n" + "\n".join(outputs)[:24000]
+                    return "Error install_packages pacman:\n" + "\n".join(outputs)
+            return "OK install_packages pacman.\n" + "\n".join(outputs)[:24000]
 
         if m == "apt":
-            # WSL fallback
-            cmd_parts = ["apt-get", "install"]
+            cmds = []
+            if update:
+                cmds.append(sudo_prefix + ["apt-get", "update", "-y"])
+            # apt-get install -y requiere -y
+            install_cmd = sudo_prefix + ["apt-get", "install"]
             if assume_yes:
-                cmd_parts.append("-y")
-            cmd_parts += pkg_tokens
-            proc = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=900, env={**os.environ})
-            out = proc.stdout + (("\n--- stderr ---\n" + proc.stderr) if proc.stderr else "")
-            if proc.returncode != 0:
-                return "Error install_packages apt:\n" + out[:24000]
-            return "OK install_packages apt.\n" + out[:24000]
+                install_cmd.append("-y")
+            install_cmd += pkg_tokens
+            cmds.append(install_cmd)
+
+            outputs = []
+            for c in cmds:
+                proc = subprocess.run(c, capture_output=True, text=True, timeout=900, env={**os.environ})
+                outputs.append(proc.stdout + (("\n--- stderr ---\n" + proc.stderr) if proc.stderr else ""))
+                if proc.returncode != 0:
+                    return "Error install_packages apt:\n" + "\n".join(outputs)
+            return "OK install_packages apt.\n" + "\n".join(outputs)[:24000]
 
         return f"Error: gestor no soportado: {m}"
     except Exception as e:
         return f"Error en install_packages: {e}"
 
-
-# ---------------------------------------------------------------------------
-# Patch
-# ---------------------------------------------------------------------------
 
 def apply_unified_patch(
     path: str,
@@ -2333,27 +2393,17 @@ def apply_unified_patch(
     allow_dangerous: bool = False,
 ) -> str:
     """
-    Aplica un diff unificado usando el binario `patch` (requiere Git/patch instalado).
+    Aplica un diff unificado usando el binario `patch`.
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. apply_unified_patch deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. apply_unified_patch deshabilitado."
         if _policy_require_confirm("apply_unified_patch") and not confirm and not allow_dangerous:
             return "Error: política requiere confirm=true para apply_unified_patch."
         if not confirm and not allow_dangerous:
             return "Error: confirm=true requerido para apply_unified_patch."
-
-        # En Windows, `patch` puede venir con Git for Windows
-        patch_bin = shutil.which("patch")
-        if not patch_bin:
-            # Intentar buscar en Git for Windows
-            git_path = shutil.which("git")
-            if git_path:
-                git_dir = Path(git_path).parent.parent / "usr" / "bin" / "patch.exe"
-                if git_dir.exists():
-                    patch_bin = str(git_dir)
-        if not patch_bin:
-            return "Error: no se encontró el binario `patch`. Instala Git for Windows."
+        if not shutil.which("patch"):
+            return "Error: no se encontró el binario `patch`."
 
         resolved_path = resolve_path(path, must_exist=True)
         if resolved_path.startswith("Error:"):
@@ -2373,13 +2423,14 @@ def apply_unified_patch(
             workdir = str(target_file.parent)
         resolved_workdir = resolve_path(workdir, must_exist=True)
         if resolved_workdir.startswith("Error:"):
+            # si workdir no existe, usamos directorio padre del archivo
             resolved_workdir = str(target_file.parent.resolve())
 
         with _path_lock(str(target_file.resolve())):
-            patch_tmp = Path(resolved_workdir) / f".jarvis_patch_{uuid.uuid4().hex}.diff"
+            patch_tmp = Path(resolved_workdir) / f".aaris_patch_{uuid.uuid4().hex}.diff"
             patch_tmp.write_text(patch_text or "", encoding="utf-8")
             proc = subprocess.run(
-                [patch_bin, f"-p{int(strip)}", "--batch", "-i", str(patch_tmp)],
+                ["patch", f"-p{int(strip)}", "--batch", "-i", str(patch_tmp)],
                 cwd=resolved_workdir,
                 capture_output=True,
                 text=True,
@@ -2394,6 +2445,7 @@ def apply_unified_patch(
             pass
         if proc.returncode != 0:
             return "Error apply_unified_patch:\n" + out[:12000]
+        # Post-checks básicas.
         if str(target_file).lower().endswith(".json"):
             try:
                 _ = json.loads(target_file.read_text(encoding="utf-8", errors="replace"))
@@ -2409,19 +2461,13 @@ def apply_unified_patch(
     except Exception as e:
         return f"Error en apply_unified_patch: {e}"
 
-
-# ---------------------------------------------------------------------------
-# AST (Python code analysis)
-# ---------------------------------------------------------------------------
-
 def ast_list_functions(path: str) -> str:
     """
     Lista las clases y funciones de un archivo Python usando parseo AST nativo.
     """
     try:
         resolved = resolve_path(path, must_exist=True)
-        if resolved.startswith("Error:"):
-            return resolved
+        if resolved.startswith("Error:"): return resolved
         with open(resolved, "r", encoding="utf-8") as f:
             code = f.read()
         import ast
@@ -2441,15 +2487,13 @@ def ast_list_functions(path: str) -> str:
     except Exception as e:
         return f"Error en ast_list_functions: {e}"
 
-
 def ast_read_function(path: str, func_name: str) -> str:
     """
     Extrae el código fuente exacto de una función o clase de un archivo Python usando AST.
     """
     try:
         resolved = resolve_path(path, must_exist=True)
-        if resolved.startswith("Error:"):
-            return resolved
+        if resolved.startswith("Error:"): return resolved
         with open(resolved, "r", encoding="utf-8") as f:
             code = f.read()
         import ast
@@ -2457,80 +2501,56 @@ def ast_read_function(path: str, func_name: str) -> str:
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 if node.name == func_name:
-                    if hasattr(ast, "unparse"):
+                    if hasattr(ast, "unparse"): 
                         return ast.unparse(node)
                     return "Error: ast.unparse requiere Python 3.9+"
         return f"No se encontró {func_name} en {path}."
     except Exception as e:
         return f"Error en ast_read_function: {e}"
 
-
-# ---------------------------------------------------------------------------
-# Docker
-# ---------------------------------------------------------------------------
-
 def docker_ps() -> str:
     """Ejecuta docker ps y devuelve el listado de contenedores corriendo."""
     try:
-        proc = subprocess.run(
-            ["docker", "ps", "--format", "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if proc.returncode != 0:
-            return f"Error: {proc.stderr}"
+        proc = subprocess.run(["docker", "ps", "--format", "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}"], capture_output=True, text=True, timeout=10)
+        if proc.returncode != 0: return f"Error: {proc.stderr}"
         return proc.stdout or "No containers running."
     except Exception as e:
-        return f"Error en docker_ps (¿Docker Desktop está instalado y activo?): {e}"
-
+        return f"Error en docker_ps (¿Docker está instalado y activo?): {e}"
 
 def docker_logs(container: str, tail: int = 50) -> str:
     """Obtiene las últimas líneas de logs de un contenedor docker."""
     try:
-        proc = subprocess.run(
-            ["docker", "logs", "--tail", str(tail), container],
-            capture_output=True, text=True, timeout=15,
-        )
+        proc = subprocess.run(["docker", "logs", "--tail", str(tail), container], capture_output=True, text=True, timeout=15)
         return (proc.stdout + proc.stderr) or "(sin logs)"
     except Exception as e:
         return f"Error en docker_logs: {e}"
-
 
 def docker_exec(container: str, command: str, allow_dangerous: bool = False) -> str:
     """Ejecuta un comando en un contenedor docker en ejecución."""
     try:
         if _policy_require_confirm("docker_exec") and not allow_dangerous:
             return "Error: confirmación o allow_dangerous=true requerido."
-        proc = subprocess.run(
-            ["docker", "exec", container, "sh", "-c", command],
-            capture_output=True, text=True, timeout=60,
-        )
+        proc = subprocess.run(["docker", "exec", container, "sh", "-c", command], capture_output=True, text=True, timeout=60)
         return (proc.stdout + proc.stderr) or f"Comando ejecutado con código {proc.returncode}."
     except Exception as e:
         return f"Error en docker_exec: {e}"
-
-
-# ---------------------------------------------------------------------------
-# SQLite
-# ---------------------------------------------------------------------------
 
 def db_query_sqlite(db_path: str, query: str) -> str:
     """Ejecuta una consulta SQL en una base de datos SQLite (.db, .sqlite)."""
     try:
         import sqlite3
         resolved = resolve_path(db_path, must_exist=True)
-        if resolved.startswith("Error:"):
-            return resolved
+        if resolved.startswith("Error:"): return resolved
         if _read_only_mode() and not query.strip().upper().startswith("SELECT"):
-            return "Error: JARVIS_READ_ONLY=true, solo SELECT está permitido."
-
+            return "Error: AARIS_READ_ONLY=true, solo SELECT está permitido."
+            
         with sqlite3.connect(resolved) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(query)
             if query.strip().upper().startswith("SELECT"):
                 rows = cursor.fetchall()
-                if not rows:
-                    return "0 results."
+                if not rows: return "0 results."
                 res = [dict(r) for r in rows]
                 return json.dumps(res, ensure_ascii=False)[:24000]
             else:
@@ -2539,11 +2559,6 @@ def db_query_sqlite(db_path: str, query: str) -> str:
     except Exception as e:
         return f"Error en db_query_sqlite: {e}"
 
-
-# ---------------------------------------------------------------------------
-# Delegation & Scheduling (Windows Task Scheduler)
-# ---------------------------------------------------------------------------
-
 def delegate_task(prompt: str) -> str:
     """Delega una tarea a una nueva instancia del agente ejecutando main.py --run-prompt."""
     try:
@@ -2551,59 +2566,37 @@ def delegate_task(prompt: str) -> str:
         import sys
         proc = subprocess.run(
             [sys.executable, agent_script, "--run-prompt", prompt],
-            capture_output=True, text=True, timeout=300, env={**os.environ},
+            capture_output=True, text=True, timeout=300, env={**os.environ}
         )
         out = proc.stdout + proc.stderr
         return f"Delegado ejecutado (código {proc.returncode}). Salida:\n{out[-12000:]}"
     except Exception as e:
         return f"Error en delegate_task: {e}"
-
-
+        
 def schedule_agent_task(cron_expr: str, prompt: str, task_name: str) -> str:
-    """
-    Crea una tarea programada usando el Programador de Tareas de Windows (schtasks).
-
-    En Windows, `cron_expr` se interpreta como un schedule de schtasks:
-    - "DAILY" / "WEEKLY" / "MONTHLY" / "ONCE"
-    - O un formato simplificado "HH:MM" para ejecución diaria.
-    """
+    """Crea una tarea programada usando crontab del usuario para lanzar el agente."""
     try:
         agent_script = str(Path(__file__).resolve().parent / "main.py")
-        import sys
-        import shlex
-
-        python_exe = sys.executable
-        prompt_escaped = prompt.replace('"', '\\"')
-        command = f'"{python_exe}" "{agent_script}" --run-prompt "{prompt_escaped}"'
-
-        # Parsear el schedule
-        cron_upper = cron_expr.strip().upper()
-        if re.match(r"^\d{2}:\d{2}$", cron_expr.strip()):
-            # Formato HH:MM → diario
-            schedule_type = "DAILY"
-            start_time = cron_expr.strip()
-        elif cron_upper in ("DAILY", "WEEKLY", "MONTHLY"):
-            schedule_type = cron_upper
-            start_time = "09:00"
-        else:
-            schedule_type = "DAILY"
-            start_time = "09:00"
-
-        safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", task_name)
-
-        schtasks_cmd = [
-            "schtasks", "/Create",
-            "/TN", f"JARVIS\\{safe_name}",
-            "/TR", command,
-            "/SC", schedule_type,
-            "/ST", start_time,
-            "/F",  # Force overwrite if exists
-        ]
-
-        proc = subprocess.run(schtasks_cmd, capture_output=True, text=True, timeout=30)
-        if proc.returncode != 0:
-            return f"Error en schtasks: {proc.stderr or proc.stdout}"
-
-        return f"Tarea '{task_name}' programada exitosamente ({schedule_type} a las {start_time})."
+        import shlex, sys
+        prompt_q = shlex.quote(prompt)
+        command = f"{sys.executable} {agent_script} --run-prompt {prompt_q} >> ~/.aaris/cron.log 2>&1"
+        cron_line = f"{cron_expr} {command}\n"
+        
+        cron_file = Path.home() / ".aaris" / "crontab.txt"
+        cron_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        proc = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+        current_cron = proc.stdout if proc.returncode == 0 else ""
+        
+        if cron_line in current_cron:
+            return f"Tarea '{task_name}' ya estaba programada."
+            
+        new_cron = current_cron.strip() + "\n" + f"# AARIS_TASK: {task_name}\n{cron_line}"
+        cron_file.write_text(new_cron, encoding="utf-8")
+        
+        apply_proc = subprocess.run(["crontab", str(cron_file)], capture_output=True, text=True)
+        if apply_proc.returncode != 0:
+            return f"Error aplicando crontab (fallback cron no disponible): {apply_proc.stderr}"
+        return f"Tarea '{task_name}' programada exitosamente con cron '{cron_expr}'."
     except Exception as e:
         return f"Error en schedule_agent_task: {e}"

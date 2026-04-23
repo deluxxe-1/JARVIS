@@ -1,0 +1,4 @@
+requests>=2.31.0
+psutil>=5.9.0
+keyboard>=0.13.5
+cryptography>=42.0.0

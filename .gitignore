@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Local app data / caches
+.jarvis/
+.aaris/
+
+# Logs / traces
+*.log
+*.jsonl
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Temp files
+*.tmp
+*.bak
