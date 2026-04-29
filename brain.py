@@ -43,7 +43,7 @@ from typing import Any, Optional
 
 VAULT_PATH = Path(os.environ.get(
     "JARVIS_VAULT_PATH",
-    r"C:\Users\deluxXe\JARVIS",
+    os.path.join(os.path.expanduser("~"), "JARVIS"),
 )).expanduser().resolve()
 
 # Carpetas principales del vault
@@ -515,7 +515,7 @@ def remember(fact: str, importance: str = "medium", category: str = "general") -
 def recall(query: str, max_results: int = 5) -> str:
     """
     Busca hechos relevantes en la memoria.
-    Búsqueda simple por palabras clave (sin embeddings, sin dependencias extra).
+    Busca en: long_term.md, learned_facts.md, actions.md y sesiones recientes.
 
     Args:
         query: Texto a buscar.
@@ -525,24 +525,55 @@ def recall(query: str, max_results: int = 5) -> str:
         query_lower = query.lower()
         results = []
 
-        # Buscar en long_term.md
+        # 1. Buscar en long_term.md (memoria principal)
         lt_path = _folder("memory") / "long_term.md"
-        content = _read(lt_path)
-        for line in content.splitlines():
+        mem_content = _read(lt_path)
+        for line in mem_content.splitlines():
             if line.startswith("- ") and query_lower in line.lower():
                 results.append(line.strip())
                 if len(results) >= max_results:
                     break
 
-        # Buscar en learned_facts.md si necesitamos más
+        # 2. Buscar en learned_facts.md
         if len(results) < max_results:
             lf_path = _folder("memory") / "learned_facts.md"
-            content = _read(lf_path)
-            for line in content.splitlines():
+            lf_content = _read(lf_path)
+            for line in lf_content.splitlines():
                 if "|" in line and query_lower in line.lower() and not line.startswith("|---"):
-                    # Saltar la cabecera de la tabla
                     if "Fecha" not in line and "Hecho" not in line:
                         results.append(line.strip())
+                        if len(results) >= max_results:
+                            break
+
+        # 3. Buscar en actions.md (acciones ejecutadas — archivos creados, comandos, etc.)
+        if len(results) < max_results:
+            actions_path = _folder("logs") / "actions.md"
+            actions_content = _read(actions_path)
+            for line in actions_content.splitlines():
+                if "|" in line and query_lower in line.lower() and not line.startswith("|---"):
+                    if "Fecha" not in line and "Acción" not in line:
+                        results.append("📋 Acción anterior: " + line.strip())
+                        if len(results) >= max_results:
+                            break
+
+        # 4. Buscar en sesiones recientes (últimas 3)
+        if len(results) < max_results:
+            sessions_dir = _folder("sessions")
+            session_files = sorted(sessions_dir.glob("*.md"), reverse=True)[:3]
+            for sf in session_files:
+                if len(results) >= max_results:
+                    break
+                sf_content = _read(sf)
+                lines = sf_content.splitlines()
+                for i, line in enumerate(lines):
+                    if query_lower in line.lower() and len(line.strip()) > 10:
+                        # Incluir algo de contexto (línea anterior y posterior)
+                        ctx_start = max(0, i - 1)
+                        ctx_end = min(len(lines), i + 2)
+                        ctx = " ".join(l.strip() for l in lines[ctx_start:ctx_end] if l.strip())
+                        snippet = f"🗂 Sesión {sf.stem}: {ctx[:200]}"
+                        if snippet not in results:
+                            results.append(snippet)
                         if len(results) >= max_results:
                             break
 
@@ -551,7 +582,7 @@ def recall(query: str, max_results: int = 5) -> str:
 
         return "Memoria relevante:\n" + "\n".join(results)
 
-    except Exception as e:
+    except Exception:
         return ""
 
 
@@ -879,10 +910,49 @@ def log_tool_usage(tool_name: str, success: bool) -> None:
 # CONTEXTO — lo que JARVIS inyecta antes de responder
 # ---------------------------------------------------------------------------
 
+def _is_memory_query(text: str) -> bool:
+    """Detecta si el usuario está preguntando por algo de sesiones anteriores."""
+    memory_keywords = [
+        "recuerdas", "recuerda", "te acuerdas", "mencioné", "dije",
+        "hicimos", "hiciste", "creaste", "creé", "sesión anterior",
+        "sesión pasada", "antes", "anteriormente", "la última vez",
+        "el otro día", "ya hablamos", "ya te dije", "sabes que",
+        "remember", "last session", "last time", "we talked about",
+    ]
+    t = text.lower()
+    return any(k in t for k in memory_keywords)
+
+
+def get_recent_actions(max_lines: int = 10) -> str:
+    """
+    Lee las últimas acciones del log de acciones para incluirlas como contexto.
+    """
+    try:
+        actions_path = _folder("logs") / "actions.md"
+        content = _read(actions_path)
+        if not content:
+            return ""
+        # Coger las últimas líneas con datos (no headers ni separadores)
+        data_lines = [
+            line.strip() for line in content.splitlines()
+            if "|" in line
+            and not line.startswith("|---")
+            and "Fecha" not in line
+            and "Acción" not in line
+            and len(line.strip()) > 5
+        ]
+        recent = data_lines[-max_lines:]
+        if not recent:
+            return ""
+        return "Acciones recientes ejecutadas:\n" + "\n".join(recent)
+    except Exception:
+        return ""
+
+
 def build_context_for_response(user_input: str) -> str:
     """
     Construye el contexto relevante del vault para incluir antes de responder.
-    Combina: perfil de usuario + tareas pendientes + memoria relevante + conocimiento.
+    Combina: perfil + tareas pendientes + memoria relevante + conocimiento + acciones recientes.
 
     Este texto se inyecta como mensaje de sistema antes de cada respuesta.
     """
@@ -891,7 +961,6 @@ def build_context_for_response(user_input: str) -> str:
     # 1. Perfil de usuario (siempre incluido, pero resumido)
     profile = get_user_profile()
     if profile:
-        # Solo las primeras líneas relevantes
         profile_lines = [
             l for l in profile.splitlines()
             if l.strip() and not l.startswith("#") and l.startswith("-")
@@ -904,12 +973,18 @@ def build_context_for_response(user_input: str) -> str:
     if tasks:
         parts.append(tasks)
 
-    # 3. Memoria relevante a la query
-    memory = recall(user_input, max_results=4)
+    # 3. Memoria relevante a la query (incluye acciones pasadas y sesiones)
+    memory = recall(user_input, max_results=6)
     if memory:
         parts.append(memory)
 
-    # 4. Conocimiento relevante a la query
+    # 4. Si el usuario pregunta por algo que hicimos, incluir acciones recientes completas
+    if _is_memory_query(user_input):
+        recent_actions = get_recent_actions(max_lines=15)
+        if recent_actions:
+            parts.append(recent_actions)
+
+    # 5. Conocimiento relevante a la query
     knowledge = search_knowledge(user_input, max_results=3)
     if knowledge:
         parts.append(knowledge)
@@ -931,27 +1006,24 @@ def extract_and_remember(user_input: str, assistant_response: str) -> None:
     Analiza la conversación y guarda automáticamente hechos importantes.
     Llamado después de cada respuesta de JARVIS.
 
-    Usa heurísticas simples (sin LLM extra) para detectar qué recordar.
+    Detecta: preferencias, nombre/ubicación, y acciones confirmadas por JARVIS.
     """
     try:
-        text = (user_input + " " + assistant_response).lower()
-
-        # Detectar preferencias del usuario
+        # ── Preferencias del usuario ────────────────────────────────────
         preference_patterns = [
             (r"(prefiero|me gusta|uso|utilizo)\s+([\w\s]+)", "preferencia"),
             (r"mi\s+(editor|ide|terminal|navegador|lenguaje)\s+es\s+([\w\s]+)", "herramienta"),
             (r"trabajo\s+con\s+([\w\s]+)", "tecnología"),
             (r"mi\s+(proyecto|servidor|base de datos)\s+([\w\s]+)", "proyecto"),
         ]
-
         for pattern, category in preference_patterns:
             match = re.search(pattern, user_input.lower())
             if match:
                 fact = match.group(0).strip()
-                if len(fact) > 5 and len(fact) < 100:
+                if 5 < len(fact) < 100:
                     remember(fact, importance="medium", category=category)
 
-        # Detectar si el usuario da su nombre
+        # ── Nombre del usuario ──────────────────────────────────────────
         name_match = re.search(
             r"(me llamo|mi nombre es|soy)\s+([A-Z][a-záéíóúñ]+)",
             user_input,
@@ -962,7 +1034,7 @@ def extract_and_remember(user_input: str, assistant_response: str) -> None:
             update_user_profile("Nombre", name)
             remember(f"El usuario se llama {name}", importance="high", category="identidad")
 
-        # Detectar si menciona su ciudad/país
+        # ── Ubicación del usuario ───────────────────────────────────────
         location_match = re.search(
             r"(vivo en|estoy en|soy de)\s+([\w\s,]+)",
             user_input,
@@ -972,6 +1044,28 @@ def extract_and_remember(user_input: str, assistant_response: str) -> None:
             location = location_match.group(2).strip()
             if len(location) < 50:
                 update_user_profile("Ubicación", location)
+
+        # ── Acciones confirmadas en la respuesta de JARVIS ──────────────
+        # Si JARVIS confirma una acción, la memoriza para sesiones futuras.
+        resp_lower = assistant_response.lower()
+        action_confirmations = [
+            # Patrón de confirmación, categoría
+            (r"(he creado|creado correctamente|archivo creado)[^.\n]{0,80}", "accion_archivo"),
+            (r"(he creado|creada correctamente|carpeta creada)[^.\n]{0,80}", "accion_carpeta"),
+            (r"(he editado|editado correctamente|archivo actualizado)[^.\n]{0,80}", "accion_archivo"),
+            (r"(he ejecutado|comando ejecutado|ejecutado correctamente)[^.\n]{0,80}", "accion_comando"),
+            (r"(he movido|movido a|se ha movido)[^.\n]{0,80}", "accion_archivo"),
+            (r"(he eliminado|eliminado correctamente|borrado)[^.\n]{0,80}", "accion_archivo"),
+            (r"(instalado correctamente|paquete instalado)[^.\n]{0,80}", "accion_sistema"),
+        ]
+        for pattern, category in action_confirmations:
+            match = re.search(pattern, resp_lower)
+            if match:
+                snippet = match.group(0).strip()
+                # Combinar con lo que pidió el usuario para dar contexto
+                fact = f"{snippet} (pedido: {user_input[:80]})"
+                if len(fact) > 15:
+                    remember(fact, importance="medium", category=category)
 
     except Exception as e:
         log_error(f"extract_and_remember: {e}", user_input[:50])
@@ -1029,31 +1123,58 @@ class JarvisBrain:
         - Guarda la conversación en la sesión
         - Extrae y recuerda hechos nuevos
         - Registra las tools usadas
+        - Memoriza automáticamente acciones significativas para recuperarlas entre sesiones
         """
         # Guardar en sesión
         log_turn(user_input, assistant_response)
 
-        # Aprender de la conversación
+        # Aprender de la conversación (preferencias, nombres, etc.)
         extract_and_remember(user_input, assistant_response)
 
-        # Registrar tools usadas
+        # Registrar tools usadas y MEMORIZAR acciones significativas
         if tool_calls_log:
             for tc in tool_calls_log:
                 tool_name = tc.get("name", "")
-                result_preview = tc.get("result_preview", "")
-                success = not str(result_preview).startswith("Error")
+                result_preview = str(tc.get("result_preview", ""))
+                args = tc.get("arguments", {}) or {}
+                success = not result_preview.startswith("Error")
 
                 if tool_name:
                     log_tool_usage(tool_name, success)
                     log_action(
                         tool=tool_name,
-                        args_summary=str(tc.get("arguments", ""))[:80],
-                        result_summary=str(result_preview)[:80],
+                        args_summary=str(args)[:80],
+                        result_summary=result_preview[:80],
                     )
+
+                # ── MEMORIZAR ACCIONES SIGNIFICATIVAS ──────────────────────
+                # Guardamos en long_term.md para que recall() pueda encontrarlo
+                # en sesiones futuras. Solo acciones exitosas.
+                if success and tool_name:
+                    _memorable_tools = {
+                        "create_file":   lambda a, r: f"Se creó el archivo '{a.get('path', '')}'. Contexto: {user_input[:80]}",
+                        "create_folder": lambda a, r: f"Se creó la carpeta '{a.get('path', '')}'. Contexto: {user_input[:80]}",
+                        "edit_file":     lambda a, r: f"Se editó el archivo '{a.get('path', '')}'. Contexto: {user_input[:80]}",
+                        "search_replace_in_file": lambda a, r: f"Se modificó el archivo '{a.get('path', '')}'. Contexto: {user_input[:80]}",
+                        "delete_path":   lambda a, r: f"Se eliminó '{a.get('path', '')}'. Contexto: {user_input[:80]}",
+                        "move_path":     lambda a, r: f"Se movió '{a.get('from_path', '')}' a '{a.get('to_path', '')}'. Contexto: {user_input[:80]}",
+                        "copy_path":     lambda a, r: f"Se copió '{a.get('from_path', '')}' a '{a.get('to_path', '')}'. Contexto: {user_input[:80]}",
+                        "run_command":   lambda a, r: f"Se ejecutó el comando: {a.get('command', '')[:60]}. Contexto: {user_input[:60]}",
+                        "append_file":   lambda a, r: f"Se añadió contenido al archivo '{a.get('path', '')}'. Contexto: {user_input[:80]}",
+                        "git_smart_commit": lambda a, r: f"Se hizo commit git: {a.get('message', r[:60])}",
+                        "install_packages": lambda a, r: f"Se instalaron paquetes: {a.get('packages', '')}",
+                    }
+                    if tool_name in _memorable_tools:
+                        try:
+                            fact = _memorable_tools[tool_name](args, result_preview)
+                            if fact and len(fact) > 10:
+                                remember(fact, importance="medium", category="accion")
+                        except Exception:
+                            pass
 
                 if not success and tool_name:
                     log_error(
-                        error=str(result_preview)[:100],
+                        error=result_preview[:100],
                         context=f"tool={tool_name}",
                     )
 

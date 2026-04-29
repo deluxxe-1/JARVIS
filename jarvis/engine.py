@@ -13,30 +13,21 @@ from jarvis.logging import configure_logging
 
 # Re-export selected legacy surface that other entrypoints rely on
 from _legacy_main import (  # noqa: F401
-    _load_memory,
-    _save_memory,
-    _build_prefix_messages,
-    _build_tool_groups,
     _prune_messages,
-    _select_tools,
     _run_tool_loop,
     _run_simple_chat_streaming,
-    DEFAULT_MEMORY_PATH,
     MAX_CONTEXT_MESSAGES,
-    MEMORY_UPDATE_EVERY,
     MODEL,
     console,
     SYSTEM_PROMPT,
 )
 
+from jarvis.tool_selector import _build_tool_groups, _select_tools
+
 
 # ---------------------------------------------------------------------------
 # Public API (no underscore prefix)
 # ---------------------------------------------------------------------------
-
-def build_prefix_messages(memory: dict[str, Any]) -> list[dict[str, Any]]:
-    return _build_prefix_messages(memory)
-
 
 def build_tool_groups(available_tools: list) -> dict[str, list]:
     return _build_tool_groups(available_tools)

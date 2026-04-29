@@ -134,10 +134,6 @@ SPECS: tuple[ToolSpec, ...] = (
         ),
     ),
     ToolSpec(
-        module="agents",
-        names=("spawn_agent", "list_running_agents", "kill_agent", "read_agent_result"),
-    ),
-    ToolSpec(
         module="hotkey",
         names=("start_voice_listener", "stop_voice_listener", "get_listener_status"),
     ),
@@ -164,6 +160,19 @@ SPECS: tuple[ToolSpec, ...] = (
             "obsidian_list_tags",
             "obsidian_recent",
             "migrate_kb_to_obsidian",
+        ),
+    ),
+    ToolSpec(
+        module="dev_agent",
+        names=(
+            "dev_agent_create",
+            "dev_agent_status",
+            "dev_agent_log",
+            "dev_agent_result",
+            "dev_agent_stop",
+            "dev_agent_schedule",
+            "dev_agent_list",
+            "dev_agent_quick",
         ),
     ),
 )

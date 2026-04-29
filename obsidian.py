@@ -33,20 +33,21 @@ _JARVIS_DIR = Path(os.environ.get(
     os.path.join(os.path.expanduser("~"), ".jarvis"),
 ))
 
+# Usa el mismo vault que brain.py para unificar toda la memoria.
 VAULT_PATH = Path(os.environ.get(
-    "JARVIS_OBSIDIAN_VAULT",
-    str(_JARVIS_DIR / "vault"),
-))
+    "JARVIS_VAULT_PATH",
+    os.path.join(os.path.expanduser("~"), "JARVIS"),
+)).expanduser().resolve()
 
 _INDEX_PATH = VAULT_PATH / "_index.json"
 
-# Carpetas del vault
+# Carpetas del vault — mapeadas a la estructura de brain.py
 _FOLDERS = {
-    "note": "Notes",
-    "bookmark": "Bookmarks",
-    "snippet": "Snippets",
-    "project": "Projects",
-    "daily": "Daily",
+    "note":     "Knowledge",
+    "bookmark": "Knowledge",
+    "snippet":  "Knowledge",
+    "project":  "Knowledge",
+    "daily":    "Sessions",
 }
 
 

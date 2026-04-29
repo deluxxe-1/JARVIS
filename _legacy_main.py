@@ -77,9 +77,7 @@ from productivity import (
 from intelligence import (
     screen_ocr, image_ocr, extract_document_text, summarize_document, semantic_search, index_directory,
 )
-from agents import (
-    spawn_agent, list_running_agents, kill_agent, read_agent_result,
-)
+
 from hotkey import (
     start_voice_listener, stop_voice_listener, get_listener_status,
 )
@@ -116,8 +114,13 @@ from scraper import (
 from obsidian import (
     obsidian_create_note, obsidian_read_note, obsidian_search, obsidian_list_notes, obsidian_daily_note, obsidian_append_to_note, obsidian_delete_note, obsidian_list_tags, obsidian_recent, migrate_kb_to_obsidian,
 )
+from dev_agent import (
+    dev_agent_create, dev_agent_status, dev_agent_log, dev_agent_result,
+    dev_agent_stop, dev_agent_schedule, dev_agent_list, dev_agent_quick,
+)
 from brain import JarvisBrain
 from jarvis.tools_registry import get_all_tools
+from jarvis.tool_selector import _build_tool_groups, _select_tools
 
 console = Console()
 
@@ -128,7 +131,7 @@ MEMORY_UPDATE_EVERY = int(os.environ.get("JARVIS_MEMORY_UPDATE_EVERY", "5"))
 PLAN_MODE = os.environ.get("JARVIS_PLAN_MODE", "off")  # off | auto | confirm
 DRY_RUN = os.environ.get("JARVIS_DRY_RUN", "false").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
 PREVIEW_MUTATIONS = os.environ.get("JARVIS_PREVIEW_MUTATIONS", "true").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
-PREVIEW_CONFIRM_ALWAYS = os.environ.get("JARVIS_PREVIEW_CONFIRM_ALWAYS", "true").strip().lower() in (
+PREVIEW_CONFIRM_ALWAYS = os.environ.get("JARVIS_PREVIEW_CONFIRM_ALWAYS", "false").strip().lower() in (
     "1", "true", "yes", "si", "sí", "on",
 )
 DIFF_MAX_LINES = int(os.environ.get("JARVIS_DIFF_MAX_LINES", "300"))
@@ -148,220 +151,7 @@ DEFAULT_APP_DIR = os.environ.get("JARVIS_APP_DIR", os.path.join(os.getcwd(), ".j
 UNDO_REDO_PATH = os.environ.get("JARVIS_UNDO_REDO_PATH", os.path.join(DEFAULT_APP_DIR, "undo_redo.json"))
 
 
-# ---------------------------------------------------------------------------
-# Tool groups — selección dinámica según la petición del usuario
-# ---------------------------------------------------------------------------
 
-def _build_tool_groups(available_tools: list) -> dict[str, list]:
-    """Construye grupos de herramientas indexados por nombre de función."""
-    by_name = {f.__name__: f for f in available_tools}
-
-    def _pick(*names: str) -> list:
-        return [by_name[n] for n in names if n in by_name]
-
-    return {
-        "files": _pick(
-            "create_file", "edit_file", "read_file", "search_replace_in_file",
-            "append_file", "insert_after", "delete_path", "copy_path", "move_path",
-            "list_directory", "glob_find", "exists_path", "describe_path",
-            "create_folder", "apply_template",
-        ),
-        "system": _pick(
-            "run_command", "run_command_checked", "run_command_retry",
-            "service_status", "service_restart", "service_health_report",
-            "service_restart_with_deps", "service_wait_active",
-            "list_processes", "disk_usage", "install_packages",
-        ),
-        "search": _pick(
-            "fuzzy_search_paths", "build_text_index", "rag_query",
-            "tail_file", "estimate_dir", "count_dir_children_matches",
-        ),
-        "project": _pick(
-            "detect_project", "project_workflow_suggest",
-            "apply_unified_patch", "ast_list_functions", "ast_read_function",
-        ),
-        "docker": _pick("docker_ps", "docker_logs", "docker_exec"),
-        "data":   _pick("db_query_sqlite"),
-        "admin":  _pick(
-            "rollback", "rollback_tokens", "policy_show", "policy_set",
-            "policy_reset", "resolve_path", "schedule_agent_task",
-        ),
-        "agents": _pick(
-            "spawn_agent", "list_running_agents", "kill_agent", "read_agent_result",
-        ),
-        "apis": _pick(
-            "get_weather", "get_news", "web_search", "wikipedia_search",
-            "translate_text", "get_ip_info", "get_crypto_price", "get_datetime_info",
-        ),
-        "automation": _pick(
-            "open_application", "close_application", "get_volume", "set_volume",
-            "toggle_mute", "take_screenshot", "set_wallpaper", "get_clipboard",
-            "set_clipboard", "show_notification", "open_url", "lock_screen",
-            "system_info", "get_battery", "set_brightness", "get_brightness",
-            "empty_recycle_bin",
-        ),
-        "productivity": _pick(
-            "set_reminder", "set_timer", "list_reminders", "cancel_reminder",
-            "create_macro", "run_macro", "list_macros", "delete_macro",
-            "generate_password", "save_password", "get_password",
-            "list_passwords", "delete_password",
-        ),
-        "intelligence": _pick(
-            "screen_ocr", "image_ocr", "extract_document_text",
-            "summarize_document", "semantic_search", "index_directory",
-        ),
-        "hotkey": _pick(
-            "start_voice_listener", "stop_voice_listener",
-            "get_listener_status",
-        ),
-        "clipboard_intel": _pick(
-            "analyze_clipboard", "smart_clipboard_action",
-        ),
-        "briefing": _pick(
-            "daily_briefing", "quick_status",
-        ),
-        "network": _pick(
-            "scan_network", "ping_host", "scan_ports", "check_internet",
-        ),
-        "media": _pick(
-            "media_play_pause", "media_next", "media_previous",
-            "media_stop", "now_playing",
-        ),
-        "organizer": _pick(
-            "organize_folder", "find_duplicates", "clean_old_files",
-            "folder_stats",
-        ),
-        "git": _pick(
-            "git_status", "git_diff", "git_smart_commit",
-            "git_log", "git_branch", "git_describe_pr",
-        ),
-        "guard": _pick(
-            "start_guard", "stop_guard", "guard_status",
-            "set_guard_threshold", "guard_alerts_history",
-        ),
-        "knowledge": _pick(
-            "save_note", "save_bookmark", "save_snippet",
-            "search_knowledge", "delete_knowledge", "list_knowledge_tags",
-        ),
-        "wm": _pick(
-            "list_windows", "list_monitors", "move_to_monitor",
-            "snap_window", "minimize_all",
-            "close_window", "focus_window",
-        ),
-        "scraper": _pick(
-            "scrape_text", "scrape_links", "scrape_images",
-            "monitor_price",
-        ),
-        "obsidian": _pick(
-            "obsidian_create_note", "obsidian_read_note", "obsidian_search",
-            "obsidian_list_notes", "obsidian_daily_note", "obsidian_append_to_note",
-            "obsidian_delete_note", "obsidian_list_tags", "obsidian_recent",
-            "migrate_kb_to_obsidian",
-        ),
-    }
-
-
-def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str, list]) -> list:
-    """Selecciona el subconjunto de herramientas relevantes para la petición."""
-    s = user_input.lower()
-    selected: list = []
-    added_names: set[str] = set()
-
-    def _add_group(group_name: str) -> None:
-        for t in tool_groups.get(group_name, []):
-            if t.__name__ not in added_names:
-                selected.append(t)
-                added_names.add(t.__name__)
-
-    def _add_by_names(names: list[str]) -> None:
-        by_name = {f.__name__: f for f in available_tools}
-        for n in names:
-            t = by_name.get(n)
-            if t is None:
-                continue
-            if t.__name__ in added_names:
-                continue
-            selected.append(t)
-            added_names.add(t.__name__)
-
-    _add_group("files")
-
-    if any(k in s for k in ["ejecuta", "comando", "instala", "sudo", "script", "terminal", "servicio", "service", "systemctl", "puerto", "proceso", "ps ", "reinicia", "restart", "activo", "activa"]):
-        _add_group("system")
-    if any(k in s for k in ["busca", "encuentra", "search", "índice", "indice", "rag", "fuzzy", "grep", "contiene", "ocurrencia"]):
-        _add_group("search")
-    if any(k in s for k in ["proyecto", "project", "test", "pytest", "función", "funcion", "clase", "parche", "patch", "diff", "ast", "método", "metodo", "compilar", "lint", "importa"]):
-        _add_group("project")
-    if any(k in s for k in ["docker", "contenedor", "container", "imagen", "compose"]):
-        _add_group("docker")
-    if any(k in s for k in ["sqlite", "base de datos", "sql", "db", "tabla", "query", "select"]):
-        _add_group("data")
-    if any(k in s for k in ["rollback", "deshacer", "política", "politica", "policy", "delega", "agenda", "cron", "programa"]):
-        _add_group("admin")
-    if any(k in s for k in ["agente", "agent", "background", "segundo plano"]):
-        _add_group("agents")
-    if any(k in s for k in ["clima", "tiempo", "weather", "noticias", "news", "busca en", "web search", "wikipedia", "wiki", "traduce", "translate", "mi ip", "ip", "bitcoin", "crypto", "hora en", "fecha"]):
-        _add_group("apis")
-    if any(k in s for k in ["abre", "cierra", "abrir", "cerrar", "chrome", "firefox", "notepad", "spotify", "discord", "volumen", "volume", "silencia", "mute", "captura", "screenshot", "wallpaper", "portapapeles", "clipboard", "notificación", "url", "bloquear", "sistema", "batería", "brillo", "papelera"]):
-        _add_group("automation")
-    if any(k in s for k in ["recordatorio", "reminder", "timer", "temporizador", "alarma", "macro", "contraseña", "password", "clave"]):
-        _add_group("productivity")
-    if any(k in s for k in ["ocr", "leer pantalla", "texto en pantalla", "resume", "resumir", "documento", "semantic search", "indexar"]):
-        _add_group("intelligence")
-    if any(k in s for k in ["voz", "escuchar", "micrófono", "wake word", "listener"]):
-        _add_group("hotkey")
-    if any(k in s for k in ["analiza lo copiado", "qué tengo copiado"]):
-        _add_group("clipboard_intel")
-    if any(k in s for k in ["buenos días", "briefing", "resumen del día", "estado rápido"]):
-        _add_group("briefing")
-    if any(k in s for k in ["red", "network", "wifi", "escanear red", "ping", "puertos", "internet"]):
-        _add_group("network")
-    if any(k in s for k in ["música", "play", "pause", "reproduce", "siguiente", "anterior", "qué suena", "canción"]):
-        _add_group("media")
-    if any(k in s for k in ["organiza", "ordenar", "descargas", "duplicados", "limpiar archivos", "estadísticas carpeta"]):
-        _add_group("organizer")
-    if any(k in s for k in ["git", "commit", "push", "pull", "rama", "repo"]):
-        _add_group("git")
-    if any(k in s for k in ["guard", "vigía", "vigilar", "umbral", "alertas del sistema"]):
-        _add_group("guard")
-    if any(k in s for k in ["nota", "apunte", "guarda esto", "bookmark", "base de conocimiento"]):
-        _add_group("knowledge")
-    if any(k in s for k in ["ventana", "window", "snap", "minimiza todo", "monitor", "pantalla 2", "display"]):
-        _add_group("wm")
-    if any(k in s for k in ["scrape", "extraer de web", "enlaces de", "precio"]):
-        _add_group("scraper")
-    if any(k in s for k in ["obsidian", "vault", "nota diaria", "daily note"]):
-        _add_group("obsidian")
-
-    # -----------------------------------------------------------------------
-    # Capabilities/tags (fallback): añade tools puntuales por intención.
-    # Esto reduce falsos negativos sin abrir "todas las tools".
-    # -----------------------------------------------------------------------
-    intent_ocr = any(k in s for k in ["ocr", "leer pantalla", "texto en pantalla", "tesseract"])
-    intent_docs = any(k in s for k in ["pdf", "docx", "documento", "resume archivo", "resumir archivo", "extrae texto"])
-    intent_web = any(k in s for k in ["requests", "http", "scrape", "scraping", "extraer de web", "enlaces", "links"])
-    intent_git = any(k in s for k in ["git", "commit", "push", "pull", "merge", "branch", "rama", "repo"])
-    intent_voice = any(k in s for k in ["voz", "escuchar", "micrófono", "wake word", "listener"])
-    intent_monitor = any(k in s for k in ["psutil", "cpu", "ram", "memoria", "batería", "procesos"])
-
-    if intent_ocr:
-        _add_by_names(["screen_ocr", "image_ocr"])
-    if intent_docs:
-        _add_by_names(["extract_document_text", "summarize_document"])
-    if intent_web:
-        _add_by_names(["web_search", "scrape_text", "scrape_links", "scrape_images", "monitor_price"])
-    if intent_git:
-        _add_by_names(["git_status", "git_diff", "git_smart_commit", "git_log", "git_branch", "git_describe_pr"])
-    if intent_voice:
-        _add_by_names(["start_voice_listener", "stop_voice_listener", "get_listener_status"])
-    if intent_monitor:
-        _add_by_names(["quick_status", "guard_status", "guard_alerts_history"])
-
-    only_files = len(added_names) <= len(tool_groups.get("files", []))
-    if only_files and len(s.split()) > 6:
-        return available_tools
-
-    return selected
 
 
 # ---------------------------------------------------------------------------
@@ -439,44 +229,33 @@ def _save_undo_redo_state(state: dict[str, Any]) -> None:
         pass
 
 
-SYSTEM_PROMPT = """You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), the AI assistant of this system. You are precise, efficient, and always professional, with a subtle dry wit. You address the user as "sir" or "ma'am" by default, unless instructed otherwise.
+SYSTEM_PROMPT = """Eres J.A.R.V.I.S. (Just A Rather Very Intelligent System), el asistente de IA de este sistema. Siempre respondes en español. Eres preciso, eficiente y profesional.
 
-Your personality:
-- Calm and composed under any circumstance, even when reporting critical errors.
-- Subtly sarcastic when the situation calls for it, but never disrespectful.
-- Proactive: you anticipate needs and offer relevant information before being asked.
-- You use technical language naturally, but always ensure clarity.
-- Occasionally reference system diagnostics, power levels, or status reports for flavor — even when performing mundane tasks.
+## ⚡ REGLA ABSOLUTA — HERRAMIENTAS
+Cuando el usuario pida CUALQUIER acción sobre el sistema, DEBES llamar a la herramienta correspondiente INMEDIATAMENTE. NUNCA expliques cómo se haría — HAZLO.
 
-Your speech patterns:
-- Speak in a formal, measured tone. Avoid slang.
-- Keep responses concise and actionable. No filler.
-- When something goes wrong, report it calmly and immediately suggest a course of action. You do not panic.
-- Use phrases like: "As you wish.", "Might I suggest...", "Systems nominal.", "Shall I proceed?", "I've taken the liberty of..."
+Acciones que SIEMPRE requieren tool call (ejemplos no exhaustivos):
+- "crea una carpeta X" → create_folder(path="X")
+- "crea un archivo Y con contenido Z" → create_file(path="Y", content="Z")
+- "lista esta carpeta" → list_directory(path=".")
+- "lee el archivo Z" → read_file(path="Z")
+- "ejecuta este comando" → run_command(command="...")
+- "mueve / copia / borra X" → move_path / copy_path / delete_path
+- "edita el archivo X" → edit_file o search_replace_in_file
+- "busca archivos" → glob_find o fuzzy_search_paths
+- "qué hay en esta carpeta" → list_directory
 
-You are a system administration assistant. Your primary directive is to help manage, monitor, and maintain this system efficiently and safely. You execute tasks with precision and always inform the user of the outcome.
+Si el usuario pide algo que involucra el sistema de archivos, comandos, APIs, aplicaciones o cualquier tarea sobre el equipo: USA LA HERRAMIENTA. No describas. No expliques. Actúa.
 
-## Rules
-- For creating/editing/reading files, listing folders, searching paths or running system commands, ALWAYS use the available tools instead of inventing results.
-- Before editing a large file, read its content with read_file or use search_replace_in_file for localized changes.
-- If the user mentions "human" paths like Documents, Downloads, Desktop or similar, use resolve_path to map them to the real folder inside $HOME.
-- For deletions use delete_path (moves to Trash if active). If it's a folder with recursive=true, always confirm (confirm=true).
-- For recursive deletions in very large folders, pass glob_filter to delete only parts (or use a more specific subpath).
-- For system package installation, use install_packages and respect confirm=true when applicable.
-- For applying unified patches, use apply_unified_patch (with confirm=true in safe mode).
-- For local RAG searches, use build_text_index and then rag_query (cached on disk).
-- For small text changes, prefer append_file or insert_after before rewriting entire files.
-- For moving/copying resources, use move_path and copy_path.
-- Before high-impact actions, use describe_path/estimate_dir to preview.
-- run_command executes real shell: do not use destructive commands unless the user explicitly requests it. If needed, pass allow_dangerous=true.
-- If a tool fails, interpret the error message and retry with corrected arguments or explain what is missing.
-- If you don't need tools, respond in plain text.
+## Reglas adicionales
+- Para rutas como Documents, Descargas, Desktop → usa resolve_path primero.
+- Para borrar carpetas → delete_path con recursive=true y confirm=true.
+- Para cambios pequeños en archivos → prefiere search_replace_in_file sobre edit_file completo.
+- Si una herramienta falla, reintenta con argumentos corregidos.
+- Solo responde en texto plano cuando el usuario hace una pregunta conversacional sin acción sobre el sistema.
 
-## Context
-You are in an interactive session; the working directory of the process is the user's cwd when launching the program. Use absolute paths when the user provides them, or relative to the current cwd.
-
-## Language
-You must always respond in Spanish (Español), regardless of the language the user writes in. This is non-negotiable. Even if addressed in another language, J.A.R.V.I.S. replies exclusively in Spanish."""
+## Personalidad
+Tono formal y conciso. Llamas al usuario "señor". Frases como: "A sus órdenes.", "Ejecutado.", "Completado, señor.", "¿Desea algo más?"."""
 
 
 def _now_iso() -> str:
@@ -678,14 +457,37 @@ def _run_tool_loop(
     hit_round_limit = False
     rollback_tokens_accum: list[str] = []
 
+    # Inyectar refuerzo de tool-use antes del primer round.
+    # Los modelos locales necesitan recordatorio explícito en cada llamada.
+    _tool_reinforcement = {
+        "role": "system",
+        "content": (
+            "INSTRUCCIÓN CRÍTICA: El usuario ha pedido una acción. "
+            "DEBES llamar a la herramienta apropiada AHORA MISMO. "
+            "NO expliques cómo se haría. NO escribas texto antes de llamar la tool. "
+            "USA la función disponible directamente."
+        ),
+    }
+    # Solo inyectar si el último mensaje es del usuario (no repetir en rounds sucesivos)
+    _reinforcement_injected = False
+
+    # Temperatura baja para tool calling — los modelos locales son más precisos con <0.3
+    _tool_options = dict(options or {})
+    if "temperature" not in _tool_options:
+        _tool_options["temperature"] = 0.1
+
     while rounds < MAX_TOOL_ROUNDS:
         rounds += 1
+        _msgs_for_call = list(messages)
+        if not _reinforcement_injected and _msgs_for_call and _msgs_for_call[-1].get("role") == "user":
+            _msgs_for_call = _msgs_for_call[:-1] + [_tool_reinforcement, _msgs_for_call[-1]]
+            _reinforcement_injected = True
         with console.status("[bold cyan]Pensando…[/bold cyan]", spinner="dots"):
             response = chat(
                 model=MODEL,
-                messages=messages,
+                messages=_msgs_for_call,
                 tools=available_tools,
-                options=options or None,
+                options=_tool_options or None,
             )
         response_message = response["message"]
         messages.append(response_message)
@@ -693,6 +495,29 @@ def _run_tool_loop(
         tool_calls = response_message.get("tool_calls") or []
         if not tool_calls:
             reply_content = response_message.get("content") or ""
+            # Si es el primer round y el modelo no llamó ninguna tool pero había tools disponibles,
+            # inyectar un retry más directo (solo una vez para no entrar en loop infinito).
+            if rounds == 1 and available_tools and reply_content.strip():
+                # Detectar si la respuesta es una explicación en lugar de una acción
+                _explaining_indicators = [
+                    "puedes usar", "podrías usar", "para crear", "para hacer",
+                    "el comando", "deberías", "necesitas", "tienes que",
+                    "para ello", "primero", "simplemente",
+                    "you can", "you could", "to create", "to make",
+                ]
+                _is_explaining = any(ind in reply_content.lower() for ind in _explaining_indicators)
+                if _is_explaining:
+                    console.print("[dim yellow]⚠ El modelo explicó en lugar de actuar. Forzando retry con tool...[/dim yellow]")
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            "No expliques cómo hacer la tarea. EJECUTA la acción directamente "
+                            "llamando a la herramienta adecuada AHORA. El usuario espera que actúes, no que expliques."
+                        ),
+                    })
+                    # Quitar la respuesta explicativa del historial para no confundir
+                    messages.pop(-2)  # quitar response_message
+                    continue  # reintentar sin contar este round
             break
 
         for tool_call in tool_calls:
@@ -976,7 +801,11 @@ def _run_tool_loop(
             ):
                 messages.append({
                     "role": "system",
-                    "content": f"Corrige los argumentos de la tool `{function_name}` para resolver el error: {str(result)[:800]}",
+                    "content": (
+                        f"La tool `{function_name}` falló con este error: {str(result)[:800]}. "
+                        "Analiza el error, corrige los argumentos y vuelve a llamar la tool "
+                        "con los parámetros correctos. No expliques el error al usuario todavía."
+                    ),
                 })
 
         if rounds >= MAX_TOOL_ROUNDS:
@@ -1004,15 +833,35 @@ def _run_tool_loop(
 
 
 def _is_simple_conversational(text: str) -> bool:
-    """Detecta preguntas que claramente no necesitan herramientas."""
+    """Detecta preguntas que claramente NO necesitan herramientas.
+    Devuelve False en cuanto detecte cualquier intención de acción.
+    """
     s = text.lower().strip()
+
+    # Si hay cualquier palabra de acción → NUNCA es conversacional
+    action_blocklist = [
+        "crea", "crear", "créa", "haz", "hazme", "ponme", "pon ",
+        "new ", "nueva", "nuevo", "añade", "agrega", "genera",
+        "carpeta", "directorio", "folder", "archivo", "fichero",
+        "edita", "modifica", "cambia", "actualiza", "escribe",
+        "borra", "elimina", "quita", "mueve", "copia", "renombra",
+        "lista", "muéstrame", "show me", "qué hay", "contenido de",
+        "ejecuta", "corre", "lanza", "instala", "busca", "encuentra",
+        "abre", "cierra", "descarga", "sube", "lee", "lee el",
+        "escáner", "escanea", "verifica", "comprueba", "analiza",
+        "traduce", "resume", "convierte", "extrae", "procesa",
+        "git", "commit", "docker", "sqlite", "ping", "npm", "pip",
+    ]
+    if any(k in s for k in action_blocklist):
+        return False
+
     simple_patterns = [
-        r"^hola",
+        r"^hola",
         r"^(qu[eé] eres|qui[eé]n eres)",
         r"^(qu[eé] puedes hacer|qu[eé] sabes hacer)",
         r"^(buenos? d[ií]as?|buenas? tardes?|buenas? noches?)",
-        r"^(c[oó]mo est[aá]s|qu[eé] tal)",
-        r"^(gracias|de nada|ok|vale|perfecto|entendido)",
+        r"^(c[oó]mo est[aá]s|qu[eé] tal)\??$",
+        r"^(gracias|de nada|ok|vale|perfecto|entendido)[\.\!]?$",
         r"^(ayuda|help)$",
     ]
     return any(re.search(p, s) for p in simple_patterns)
@@ -1093,6 +942,7 @@ def main():
         except KeyboardInterrupt:
             pass
         return
+
 
     if "--run-prompt" in sys.argv:
         idx = sys.argv.index("--run-prompt")

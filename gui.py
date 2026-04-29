@@ -12,7 +12,6 @@ from PySide6.QtGui import QFont, QColor, QPalette
 
 # Import engine public API (no underscore prefix)
 from jarvis.engine import (
-    build_prefix_messages,
     select_tools,
     run_tool_loop,
     run_simple_chat,

@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from _legacy_main import _build_tool_groups, _select_tools
+from jarvis.tool_selector import _build_tool_groups, _select_tools
 
 
 def _mk(name: str):
