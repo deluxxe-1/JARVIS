@@ -39,6 +39,7 @@ def _build_tool_groups(available_tools: list) -> dict[str, list]:
         "project": _pick(
             "detect_project", "project_workflow_suggest",
             "apply_unified_patch", "ast_list_functions", "ast_read_function",
+            "scaffold_project",
         ),
         "docker": _pick("docker_ps", "docker_logs", "docker_exec"),
         "data":   _pick("db_query_sqlite"),
@@ -52,7 +53,8 @@ def _build_tool_groups(available_tools: list) -> dict[str, list]:
             "dev_agent_list", "dev_agent_quick",
         ),
         "apis": _pick(
-            "get_weather", "get_news", "web_search", "wikipedia_search",
+            "get_weather", "get_news", "web_search", "web_search_full",
+            "web_read_page", "wikipedia_search",
             "translate_text", "get_ip_info", "get_crypto_price", "get_datetime_info",
         ),
         "automation": _pick(
@@ -181,6 +183,32 @@ def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str,
         "scraper", "bot", "backend", "frontend", "fullstack",
     ]):
         _add_group("agents")
+    # Programación directa (sin dev_agent) — cuando pide código, scripts, programas
+    if any(k in s for k in [
+        "programa", "programar", "programame", "código", "codigo",
+        "script", "función", "funcion", "clase ", "algoritmo",
+        "python", "javascript", "java ", "html", "css", "react",
+        "flask", "fastapi", "django", "node", "express",
+        "hazme un", "escríbeme", "escribeme", "codea",
+        "app ", "aplicación", "aplicacion", "página web", "pagina web",
+    ]):
+        _add_group("files")
+        _add_group("system")
+        _add_group("project")
+
+    # Investigación web / información de internet
+    if any(k in s for k in [
+        "busca en internet", "busca en la web", "busca online",
+        "investiga", "información sobre", "informacion sobre",
+        "qué dice internet", "que dice internet",
+        "lee esta página", "lee esta pagina", "lee esta url",
+        "abre esta web", "abre esta url", "contenido de la web",
+        "averigua", "indaga", "consulta en internet",
+        "resume esta web", "extrae información de", "resume este artículo"
+    ]):
+        _add_group("apis")
+        _add_group("scraper")
+
     if any(k in s for k in ["clima", "tiempo", "weather", "noticias", "news", "busca en", "web search", "wikipedia", "wiki", "traduce", "translate", "mi ip", "ip", "bitcoin", "crypto", "hora en", "fecha"]):
         _add_group("apis")
     if any(k in s for k in ["abre", "cierra", "abrir", "cerrar", "chrome", "firefox", "notepad", "spotify", "discord", "volumen", "volume", "silencia", "mute", "captura", "screenshot", "wallpaper", "portapapeles", "clipboard", "notificación", "url", "bloquear", "sistema", "batería", "brillo", "papelera"]):
@@ -224,6 +252,8 @@ def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str,
     intent_git = any(k in s for k in ["git", "commit", "push", "pull", "merge", "branch", "rama", "repo"])
     intent_voice = any(k in s for k in ["voz", "escuchar", "micrófono", "wake word", "listener"])
     intent_monitor = any(k in s for k in ["psutil", "cpu", "ram", "memoria", "batería", "procesos"])
+    intent_programming = any(k in s for k in ["script", "código", "codigo", "programa", "función", "funcion", "python", "javascript"])
+    intent_web_research = any(k in s for k in ["investiga", "averigua", "busca en internet", "información sobre", "informacion sobre"])
 
     if intent_ocr:
         _add_by_names(["screen_ocr", "image_ocr"])
@@ -237,6 +267,12 @@ def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str,
         _add_by_names(["start_voice_listener", "stop_voice_listener", "get_listener_status"])
     if intent_monitor:
         _add_by_names(["quick_status", "guard_status", "guard_alerts_history"])
+    if intent_programming:
+        _add_by_names(["create_file", "edit_file", "read_file", "search_replace_in_file",
+                       "create_folder", "run_command", "run_command_checked", "list_directory"])
+    if intent_web_research:
+        _add_by_names(["web_search_full", "web_read_page", "web_search", "wikipedia_search",
+                       "scrape_text", "scrape_links"])
 
     # NO dumpeamos todas las tools aunque solo estén las de files.
     # Los modelos locales se abruman con >50 tools y prefieren explicar antes que actuar.
@@ -263,6 +299,9 @@ def _is_simple_conversational(text: str) -> bool:
         "escáner", "escanea", "verifica", "comprueba", "analiza",
         "traduce", "resume", "convierte", "extrae", "procesa",
         "git", "commit", "docker", "sqlite", "ping", "npm", "pip",
+        "programa", "programar", "código", "codigo", "script",
+        "python", "javascript", "html", "css",
+        "investiga", "averigua",
     ]
     if any(k in s for k in action_blocklist):
         return False

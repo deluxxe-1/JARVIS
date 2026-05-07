@@ -1,31 +1,19 @@
 """
-Compatibility entrypoint.
+Main entrypoint for JARVIS.
 
-The original implementation lives in `_legacy_main.py`. This wrapper keeps the
-same import surface (`import main`) while enabling the gradual move into the
-`jarvis/` package.
-
-Important: We intentionally re-export legacy symbols because existing modules
-and integrations may import internal helpers from `main`.
+This wrapper keeps the `python main.py` execution while fully
+delegating all logic to the modular `jarvis/` package.
 """
-
 from __future__ import annotations
 
-# Re-export everything legacy exposed (including internal helpers)
-from _legacy_main import *  # noqa: F403
+from jarvis.engine import main as engine_main
 
-
-def main() -> None:  # noqa: F811
+def main() -> None:
     """
     Primary entrypoint for `python main.py`.
-    Delegates to `jarvis.engine` (which currently delegates to `_legacy_main`).
+    Delegates to `jarvis.engine`.
     """
-
-    from jarvis.engine import main as engine_main
-
     engine_main()
-
 
 if __name__ == "__main__":
     main()
-

@@ -307,9 +307,345 @@ def web_search(query: str, max_results: int = 8) -> str:
         return f"Error en web_search: {e}"
 
 
+def web_search_full(query: str, max_results: int = 8) -> str:
+    """
+    Busca en la web y devuelve resultados de búsqueda reales
+    con título, URL y snippet descriptivo.
+
+    Usa Google Custom Search si JARVIS_GOOGLE_API_KEY y JARVIS_GOOGLE_CX están configurados,
+    si no, usa DuckDuckGo HTML scraping como fallback gratuito.
+
+    Esta herramienta es superior a web_search para obtener información real de internet.
+    Úsala cuando el usuario pregunte por información actualizada o pida investigar un tema.
+
+    Args:
+        query: Texto a buscar en internet.
+        max_results: Número máximo de resultados a devolver.
+    """
+    try:
+        if not query or not query.strip():
+            return "Error: query vacía."
+
+        # ── Google Custom Search (si hay API key) ──
+        google_api_key = os.environ.get("JARVIS_GOOGLE_API_KEY", "").strip()
+        google_cx = os.environ.get("JARVIS_GOOGLE_CX", "").strip()
+
+        if google_api_key and google_cx:
+            try:
+                gurl = (
+                    f"https://www.googleapis.com/customsearch/v1"
+                    f"?key={google_api_key}&cx={google_cx}"
+                    f"&q={quote_plus(query)}&num={min(max_results, 10)}"
+                    f"&lr=lang_es&gl=es"
+                )
+                status, body = _http_get(gurl, timeout=15)
+                if status == 200:
+                    data = json.loads(body)
+                    items = data.get("items", [])
+                    results = []
+                    for item in items[:max_results]:
+                        results.append({
+                            "title": item.get("title", ""),
+                            "url": item.get("link", ""),
+                            "snippet": item.get("snippet", ""),
+                        })
+                    if results:
+                        return json.dumps({
+                            "query": query,
+                            "engine": "google",
+                            "count": len(results),
+                            "results": results,
+                        }, ensure_ascii=False)
+            except Exception:
+                pass  # Fallback a DuckDuckGo
+
+        # ── DuckDuckGo HTML scraping (fallback gratuito) ──
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "Chrome/120.0.0.0 Safari/537.36",
+        }
+
+        try:
+            import requests as req_lib
+            resp = req_lib.post(
+                "https://html.duckduckgo.com/html/",
+                data={"q": query, "b": ""},
+                headers=headers,
+                timeout=15,
+            )
+            html = resp.text
+        except ImportError:
+            import urllib.request
+            import urllib.parse
+            data = urllib.parse.urlencode({"q": query, "b": ""}).encode("utf-8")
+            req = urllib.request.Request(
+                "https://html.duckduckgo.com/html/",
+                data=data,
+                headers=headers,
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                html = resp.read().decode("utf-8", errors="replace")
+
+        results: list[dict[str, str]] = []
+
+        result_blocks = re.findall(
+            r'class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
+            r'class="result__snippet"[^>]*>(.*?)</(?:a|span)>',
+            html,
+            re.DOTALL,
+        )
+
+        for href, title_html, snippet_html in result_blocks[:max_results]:
+            title = re.sub(r"<[^>]+>", "", title_html).strip()
+            snippet = re.sub(r"<[^>]+>", "", snippet_html).strip()
+
+            actual_url = href
+            uddg_match = re.search(r"uddg=([^&]+)", href)
+            if uddg_match:
+                from urllib.parse import unquote
+                actual_url = unquote(uddg_match.group(1))
+
+            if title and actual_url:
+                results.append({
+                    "title": title,
+                    "url": actual_url,
+                    "snippet": snippet,
+                })
+
+        if not results:
+            links = re.findall(
+                r'<a[^>]+class="[^"]*result[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+                html,
+                re.DOTALL,
+            )
+            for href, title_html in links[:max_results]:
+                title = re.sub(r"<[^>]+>", "", title_html).strip()
+                actual_url = href
+                uddg_match = re.search(r"uddg=([^&]+)", href)
+                if uddg_match:
+                    from urllib.parse import unquote
+                    actual_url = unquote(uddg_match.group(1))
+                if title and "duckduckgo" not in actual_url.lower():
+                    results.append({
+                        "title": title,
+                        "url": actual_url,
+                        "snippet": "",
+                    })
+
+        if not results:
+            return web_search(query, max_results=max_results)
+
+        return json.dumps({
+            "query": query,
+            "engine": "duckduckgo",
+            "count": len(results),
+            "results": results,
+        }, ensure_ascii=False)
+    except Exception as e:
+        try:
+            return web_search(query, max_results=max_results)
+        except Exception:
+            return f"Error en web_search_full: {e}"
+
+
+def _clean_html_to_text(html: str) -> str:
+    """Convierte HTML a texto limpio y estructurado."""
+    text = html
+
+    # 1. Eliminar scripts, styles, nav, footer, header, aside (ruido)
+    for tag in ["script", "style", "nav", "footer", "header", "aside", "noscript", "iframe"]:
+        text = re.sub(
+            rf"<{tag}[^>]*>.*?</{tag}>", "", text,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+
+    # 2. Eliminar comentarios HTML
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+
+    # 3. Convertir headers a formato legible
+    for i in range(1, 7):
+        text = re.sub(
+            rf"<h{i}[^>]*>(.*?)</h{i}>",
+            rf"\n\n{'#' * i} \1\n",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+
+    # 4. Convertir párrafos y divs a saltos de línea
+    text = re.sub(r"<br[^>]*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</(p|div|li|tr|blockquote)>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<li[^>]*>", "• ", text, flags=re.IGNORECASE)
+
+    # 5. Eliminar todas las tags HTML restantes
+    text = re.sub(r"<[^>]+>", "", text)
+
+    # 6. Decodificar entidades HTML
+    text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    text = text.replace("&nbsp;", " ").replace("&quot;", '"').replace("&#39;", "'")
+    text = text.replace("&mdash;", "—").replace("&ndash;", "–")
+    text = text.replace("&laquo;", "«").replace("&raquo;", "»")
+
+    # 7. Colapsar whitespace excesivo
+    text = re.sub(r"\n\s*\n\s*\n", "\n\n", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n ", "\n", text)
+
+    # 8. Eliminar líneas muy cortas al principio (menús, breadcrumbs)
+    lines = text.strip().split("\n")
+    content_start = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if len(stripped) > 60 or stripped.startswith("#"):
+            content_start = max(0, i - 1)
+            break
+    lines = lines[content_start:]
+
+    return "\n".join(lines).strip()
+
+
+def _fetch_with_playwright(url: str, timeout_ms: int = 20000) -> Optional[str]:
+    """
+    Usa Playwright (si está instalado) para renderizar una página con JavaScript.
+    Intenta conectarse a un Chrome local abierto con remote debugging (puerto 9222),
+    si no puede, levanta una instancia headless.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None
+
+    try:
+        with sync_playwright() as p:
+            browser = None
+            cdp_url = "http://localhost:9222"
+            try:
+                # Intentar conectar al Chrome del usuario
+                browser = p.chromium.connect_over_cdp(cdp_url)
+                # Usar el contexto por defecto para aprovechar cookies/sesión
+                context = browser.contexts[0] if browser.contexts else browser.new_context()
+                page = context.new_page()
+            except Exception as cdp_err:
+                # Fallback a headless normal
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                               "Chrome/120.0.0.0 Safari/537.36",
+                )
+
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            # Esperar un poco para que SPAs carguen contenido dinámico
+            page.wait_for_timeout(2000)
+            html = page.content()
+            page.close()
+            
+            if browser and not browser.contexts: # Si fue headless
+                browser.close()
+                
+            return html
+    except Exception as e:
+        print(f"Playwright error: {e}")
+        return None
+
+
+def web_read_page(url: str, max_chars: int = 8000, force_browser: bool = False) -> str:
+    """
+    Lee una página web y devuelve su contenido como texto limpio y estructurado.
+    Ideal para leer artículos, documentación, blogs, noticias, etc.
+
+    Primero intenta con requests (rápido). Si el contenido es escaso o vacío
+    (típico de webs SPA con JavaScript), automáticamente reintenta con Playwright
+    (navegador real) si está instalado.
+
+    Úsala después de web_search_full para profundizar en un resultado.
+    También úsala cuando el usuario diga "lee esta página", "qué dice esta URL", etc.
+
+    Args:
+        url: URL de la página a leer.
+        max_chars: Máximo de caracteres a devolver (default 8000 para no saturar contexto).
+        force_browser: Si True, usa Playwright directamente sin intentar requests primero.
+    """
+    try:
+        if not url or not url.strip():
+            return "Error: URL vacía."
+
+        url = url.strip()
+        if not url.startswith("http"):
+            url = "https://" + url
+
+        html = None
+        used_browser = False
+
+        # ── Paso 1: Intentar con requests (rápido) ──
+        if not force_browser:
+            try:
+                import requests
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                  "Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+                }
+                response = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
+                response.raise_for_status()
+                html = response.text
+            except ImportError:
+                pass
+            except Exception:
+                html = None
+
+        # ── Paso 2: Evaluar si el contenido es suficiente ──
+        text = ""
+        title = ""
+        if html:
+            title_match = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+            if title_match:
+                title = re.sub(r"<[^>]+>", "", title_match.group(1)).strip()
+            text = _clean_html_to_text(html)
+
+        # Si el texto extraído es muy corto, probablemente es una SPA → usar Playwright
+        needs_browser = force_browser or (not text.strip()) or (len(text.strip()) < 200)
+
+        # ── Paso 3: Fallback a Playwright si el contenido es insuficiente ──
+        if needs_browser:
+            pw_html = _fetch_with_playwright(url)
+            if pw_html:
+                used_browser = True
+                html = pw_html
+                title_match = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+                if title_match:
+                    title = re.sub(r"<[^>]+>", "", title_match.group(1)).strip()
+                text = _clean_html_to_text(html)
+
+        # Truncar al máximo
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n\n[... contenido truncado ...]"
+
+        if not text.strip():
+            return json.dumps({
+                "status": "ok",
+                "url": url,
+                "title": title,
+                "text": "",
+                "used_browser": used_browser,
+                "message": "No se pudo extraer texto útil de la página.",
+            }, ensure_ascii=False)
+
+        return json.dumps({
+            "status": "ok",
+            "url": url,
+            "title": title,
+            "chars": len(text),
+            "used_browser": used_browser,
+            "text": text,
+        }, ensure_ascii=False)
+    except Exception as e:
+        return f"Error en web_read_page: {e}"
+
+
 # ---------------------------------------------------------------------------
 # Wikipedia — API pública (gratis, sin key)
-# ---------------------------------------------------------------------------
+
+
 
 def wikipedia_search(query: str, lang: str = "es", sentences: int = 5) -> str:
     """
@@ -615,3 +951,52 @@ def get_datetime_info(location: str = "") -> str:
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
         return f"Error en get_datetime_info: {e}"
+def extract_info_from_url(url: str, query: str) -> str:
+    """
+    Lee una página web completa y utiliza la IA local (Ollama) para extraer SOLO
+    la información relevante según la consulta (query).
+    
+    Útil para resumir artículos largos o buscar datos específicos en la web
+    sin saturar la memoria (contexto) principal del agente.
+    """
+    try:
+        from ollama import chat
+    except ImportError:
+        return "Error: la librería `ollama` no está instalada. No se puede realizar extracción inteligente."
+        
+    # Leer la página
+    text = web_read_page(url, max_chars=40000)
+    if not text or text.startswith("Error"):
+        return f"Error al leer la página: {text}"
+        
+    # Limitar a ~30k chars para que quepa en el contexto de Ollama
+    text_slice = text[:30000]
+    
+    system_prompt = (
+        "Eres un analizador de información web experto y preciso. Tu tarea es "
+        "leer el siguiente texto de una página web y responder a la consulta "
+        "del usuario extrayendo SOLO la información relevante. Escribe un resumen "
+        "coherente. Si la información solicitada no se encuentra en el texto, "
+        "indícalo claramente y no inventes datos."
+    )
+    
+    prompt = f"Consulta a responder: {query}\\n\\n--- TEXTO DE LA WEB ---\\n{text_slice}\\n--- FIN DEL TEXTO ---"
+    
+    model = os.environ.get("JARVIS_MODEL", "qwen2.5:14b")
+    
+    try:
+        response = chat(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            options={"temperature": 0.1, "num_ctx": 16000}
+        )
+        return json.dumps({
+            "url": url,
+            "query": query,
+            "extracted_info": response.get("message", {}).get("content", "Sin respuesta.")
+        }, ensure_ascii=False)
+    except Exception as e:
+        return f"Error al usar el LLM ({model}) para extraer info: {e}"

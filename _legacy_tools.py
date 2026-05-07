@@ -1720,6 +1720,185 @@ def apply_template(template_name: str, destination: str, context_json: str = "{}
         return f"Error en apply_template: {e}"
 
 
+def scaffold_project(
+    project_type: str,
+    destination: str,
+    name: str = "app",
+    confirm: bool = False,
+    allow_dangerous: bool = False,
+) -> str:
+    """
+    Crea (scaffold) un proyecto base para que el agente pueda implementarlo.
+
+    Tipos soportados (iniciales):
+    - web_static: HTML/CSS/JS sin dependencias
+    - api_fastapi: API Python mínima (FastAPI)
+    - web_vite_react: Vite + React (requiere Node/npm) (confirm=true)
+    - mobile_expo: React Native con Expo (requiere Node/npm) (confirm=true)
+    - mobile_flutter: Flutter (requiere flutter) (confirm=true)
+
+    Nota: los tipos que ejecutan generadores externos requieren confirm=true.
+    """
+    try:
+        if _read_only_mode():
+            return "Error: JARVIS_READ_ONLY=true. scaffold_project deshabilitado."
+
+        ptype = (project_type or "").strip().lower()
+        if not ptype:
+            return "Error: project_type vacío."
+
+        resolved_dest = resolve_path(destination, must_exist=False)
+        if resolved_dest.startswith("Error:"):
+            return resolved_dest
+        dest = Path(resolved_dest).resolve()
+        dest.mkdir(parents=True, exist_ok=True)
+
+        safe_name = re.sub(r"[^\w\-]", "-", (name or "app").strip().lower())[:60] or "app"
+
+        def _need_confirm(msg: str) -> str:
+            if confirm:
+                return ""
+            return (
+                "Confirmación requerida: "
+                + msg
+                + " Repite con confirm=true (y allow_dangerous=true si aplica)."
+            )
+
+        # -------------------------------------------------------------------
+        # 1) Web estática (sin herramientas externas)
+        # -------------------------------------------------------------------
+        if ptype == "web_static":
+            (dest / "index.html").write_text(
+                "<!doctype html>\n"
+                "<html lang=\"es\">\n"
+                "<head>\n"
+                "  <meta charset=\"utf-8\" />\n"
+                "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n"
+                f"  <title>{safe_name}</title>\n"
+                "  <link rel=\"stylesheet\" href=\"style.css\" />\n"
+                "</head>\n"
+                "<body>\n"
+                "  <main class=\"container\">\n"
+                f"    <h1>{safe_name}</h1>\n"
+                "    <p>Proyecto creado por JARVIS.</p>\n"
+                "    <button id=\"btn\">Probar</button>\n"
+                "    <pre id=\"out\"></pre>\n"
+                "  </main>\n"
+                "  <script src=\"app.js\"></script>\n"
+                "</body>\n"
+                "</html>\n",
+                encoding="utf-8",
+            )
+            (dest / "style.css").write_text(
+                "html, body { height: 100%; }\n"
+                "body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }\n"
+                ".container { max-width: 900px; margin: 40px auto; padding: 0 16px; }\n"
+                "button { padding: 10px 14px; border-radius: 10px; border: 1px solid #ccc; cursor: pointer; }\n"
+                "pre { margin-top: 14px; background: #111; color: #eee; padding: 12px; border-radius: 12px; overflow:auto; }\n",
+                encoding="utf-8",
+            )
+            (dest / "app.js").write_text(
+                "const btn = document.querySelector('#btn');\n"
+                "const out = document.querySelector('#out');\n"
+                "btn.addEventListener('click', () => {\n"
+                "  const now = new Date().toISOString();\n"
+                "  out.textContent = `OK: ${now}`;\n"
+                "});\n",
+                encoding="utf-8",
+            )
+            (dest / "README.md").write_text(
+                f"# {safe_name}\n\n"
+                "## Ejecutar\n\n"
+                "- Abre `index.html` en tu navegador.\n",
+                encoding="utf-8",
+            )
+            return json.dumps(
+                {
+                    "status": "ok",
+                    "project_type": ptype,
+                    "destination": str(dest),
+                    "run": ["Abrir index.html en el navegador"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        # -------------------------------------------------------------------
+        # 2) API FastAPI mínima (sin generadores externos)
+        # -------------------------------------------------------------------
+        if ptype == "api_fastapi":
+            app_dir = dest / safe_name
+            app_dir.mkdir(parents=True, exist_ok=True)
+            (app_dir / "__init__.py").write_text("", encoding="utf-8")
+            (app_dir / "main.py").write_text(
+                "from fastapi import FastAPI\n\n"
+                "app = FastAPI(title=\"jarvis-api\")\n\n"
+                "@app.get(\"/health\")\n"
+                "def health():\n"
+                "    return {\"status\": \"ok\"}\n",
+                encoding="utf-8",
+            )
+            (dest / "requirements.txt").write_text("fastapi>=0.110.0\nuvicorn>=0.27.0\n", encoding="utf-8")
+            (dest / "README.md").write_text(
+                f"# {safe_name} (FastAPI)\n\n"
+                "## Setup\n\n"
+                "```bash\n"
+                "python -m venv .venv\n"
+                ".venv\\Scripts\\activate\n"
+                "pip install -r requirements.txt\n"
+                "```\n\n"
+                "## Run\n\n"
+                "```bash\n"
+                f"uvicorn {safe_name}.main:app --reload\n"
+                "```\n",
+                encoding="utf-8",
+            )
+            return json.dumps(
+                {
+                    "status": "ok",
+                    "project_type": ptype,
+                    "destination": str(dest),
+                    "run": [f"pip install -r requirements.txt", f"uvicorn {safe_name}.main:app --reload"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        # -------------------------------------------------------------------
+        # 3) Generadores externos (requieren confirm)
+        # -------------------------------------------------------------------
+        if ptype in ("web_vite_react", "mobile_expo", "mobile_flutter"):
+            msg = _need_confirm(f"Esto ejecuta herramientas externas para crear '{ptype}'.")
+            if msg:
+                return msg
+            if not allow_dangerous:
+                return "Error: scaffold_project requiere allow_dangerous=true para ejecutar generadores."
+
+            # Elegimos comandos con paths entre comillas (Windows friendly).
+            if ptype == "web_vite_react":
+                cmd = f"npm create vite@latest \"{safe_name}\" -- --template react"
+                res = run_command_checked(cmd, cwd=str(dest), timeout_seconds=900, allow_dangerous=True)
+                return res
+
+            if ptype == "mobile_expo":
+                # create-expo-app (Expo) scaffold
+                cmd = f"npx create-expo-app@latest \"{safe_name}\""
+                res = run_command_checked(cmd, cwd=str(dest), timeout_seconds=1200, allow_dangerous=True)
+                return res
+
+            if ptype == "mobile_flutter":
+                cmd = f"flutter create \"{safe_name}\""
+                res = run_command_checked(cmd, cwd=str(dest), timeout_seconds=1200, allow_dangerous=True)
+                return res
+
+        return (
+            "Error: project_type no soportado. "
+            "Usa: web_static | api_fastapi | web_vite_react | mobile_expo | mobile_flutter"
+        )
+    except Exception as e:
+        return f"Error en scaffold_project: {e}"
+
+
 def append_file(path: str, content: str) -> str:
     """
     Añade contenido al final de un archivo (crea directorios padre).

@@ -9,6 +9,7 @@ import os
 import threading
 import json
 from typing import Optional
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Configuración
@@ -18,6 +19,28 @@ WAKE_WORD = os.environ.get("JARVIS_WAKE_WORD", "jarvis").lower()
 _listener_active = threading.Event()
 _listener_thread: Optional[threading.Thread] = None
 _listener_callback = None
+
+# Hotkey (persistencia simple)
+_JARVIS_DIR = Path(os.environ.get("JARVIS_APP_DIR", os.path.join(os.path.expanduser("~"), ".jarvis")))
+_HOTKEY_PATH = _JARVIS_DIR / "hotkey.json"
+_hotkey_combo = os.environ.get("JARVIS_HOTKEY", "win+j").strip().lower() or "win+j"
+
+
+def _ensure_dir() -> None:
+    _JARVIS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _load_hotkey() -> str:
+    global _hotkey_combo
+    try:
+        if _HOTKEY_PATH.is_file():
+            obj = json.loads(_HOTKEY_PATH.read_text(encoding="utf-8"))
+            combo = (obj.get("combo") or "").strip().lower()
+            if combo:
+                _hotkey_combo = combo
+    except Exception:
+        pass
+    return _hotkey_combo
 
 
 def set_voice_callback(callback) -> None:
@@ -113,3 +136,41 @@ def get_listener_status() -> str:
         "wake_word": WAKE_WORD,
         "type": "voice",
     }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Hotkey API (compatibilidad con tests / README)
+# ---------------------------------------------------------------------------
+
+
+def get_hotkey_status() -> str:
+    """
+    Devuelve el estado del hotkey global (config y si hay listener activo).
+    Nota: este módulo no registra un hotkey real del sistema; expone la config.
+    """
+    combo = _load_hotkey()
+    return json.dumps(
+        {
+            "active": bool(_listener_active.is_set()),
+            "combo": combo,
+            "type": "hotkey",
+        },
+        ensure_ascii=False,
+    )
+
+
+def change_hotkey(combo: str) -> str:
+    """
+    Cambia el combo de hotkey persistiendo en `JARVIS_APP_DIR/hotkey.json`.
+    """
+    global _hotkey_combo
+    try:
+        new_combo = (combo or "").strip().lower()
+        if not new_combo:
+            return "Error: combo vacío."
+        _hotkey_combo = new_combo
+        _ensure_dir()
+        _HOTKEY_PATH.write_text(json.dumps({"combo": _hotkey_combo}, ensure_ascii=False, indent=2), encoding="utf-8")
+        return f"OK: hotkey cambiado a '{_hotkey_combo}'."
+    except Exception as e:
+        return f"Error en change_hotkey: {e}"
