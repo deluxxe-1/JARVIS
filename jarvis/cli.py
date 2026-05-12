@@ -7,102 +7,18 @@ from typing import Any
 from datetime import datetime
 from pathlib import Path
 
-from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
-from ollama import chat
 
-from jarvis.tools.core import (
-    policy_show, policy_set, policy_reset, rollback, rollback_tokens
-)
-from jarvis.tools.filesystem import (
-    create_file, read_file, edit_file, search_replace_in_file, create_folder, list_directory, glob_find, resolve_path, exists_path, stat_path, describe_path, estimate_dir, disk_usage, tail_file, count_dir_children_matches, fuzzy_search_paths, append_file, insert_after, copy_path, move_path, delete_path, apply_unified_patch
-)
-from jarvis.tools.system import (
-    list_processes, validate_python_syntax, service_status, service_restart, service_wait_active, service_health_report, service_restart_with_deps, run_command, run_command_checked, run_command_retry, install_packages
-)
-from jarvis.tools.project import (
-    detect_project, project_workflow_suggest, apply_template, scaffold_project
-)
-from jarvis.tools.search import (
-    build_text_index, rag_query
-)
-from jarvis.tools.docker import (
-    docker_ps, docker_logs, docker_exec
-)
-from jarvis.tools.sqlite import (
-    db_query_sqlite
-)
-from jarvis.tools.ast_tools import (
-    ast_list_functions, ast_read_function
-)
-from jarvis.tools.agents import (
-    delegate_task, schedule_agent_task
-)
-
-from apis import (
-    get_weather, get_news, web_search, web_search_full, web_read_page,
-    wikipedia_search, translate_text,
-    get_ip_info, get_crypto_price, get_datetime_info,
-)
-from automation import (
-    open_application, close_application, get_volume, set_volume, toggle_mute, take_screenshot, set_wallpaper, get_clipboard, set_clipboard, show_notification, open_url, lock_screen, system_info, get_battery, set_brightness, get_brightness, empty_recycle_bin,
-)
-from productivity import (
-    set_reminder, set_timer, list_reminders, cancel_reminder, create_macro, run_macro, list_macros, delete_macro, generate_password, save_password, get_password, list_passwords, delete_password,
-)
-from intelligence import (
-    screen_ocr, image_ocr, extract_document_text, summarize_document, semantic_search, index_directory,
-)
-
-from hotkey import (
-    start_voice_listener, stop_voice_listener, get_listener_status,
-)
-from clipboard_intel import (
-    analyze_clipboard, smart_clipboard_action,
-)
-from briefing import (
-    daily_briefing, quick_status,
-)
-from network import (
-    scan_network, ping_host, scan_ports, check_internet,
-)
-from media import (
-    media_play_pause, media_next, media_previous, media_stop, now_playing,
-)
-from organizer import (
-    organize_folder, find_duplicates, clean_old_files, folder_stats,
-)
-from git_tools import (
-    git_status, git_diff, git_smart_commit, git_log, git_branch, git_describe_pr,
-)
-from guard import (
-    start_guard, stop_guard, guard_status, set_guard_threshold, guard_alerts_history,
-)
-from knowledge import (
-    save_note, save_bookmark, save_snippet, search_knowledge, delete_knowledge, list_knowledge_tags,
-)
-from windows import (
-    list_windows, list_monitors, move_to_monitor, snap_window, minimize_all, close_window, focus_window,
-)
-from scraper import (
-    scrape_text, scrape_links, scrape_images, monitor_price,
-)
-from obsidian import (
-    obsidian_create_note, obsidian_read_note, obsidian_search, obsidian_list_notes, obsidian_daily_note, obsidian_append_to_note, obsidian_delete_note, obsidian_list_tags, obsidian_recent, migrate_kb_to_obsidian,
-)
-from dev_agent import (
-    dev_agent_create, dev_agent_status, dev_agent_log, dev_agent_result,
-    dev_agent_stop, dev_agent_schedule, dev_agent_list, dev_agent_quick,
-)
+from jarvis.engine import MODEL, console, prune_messages, run_simple_chat, run_tool_loop
+from jarvis.tools.core import rollback, rollback_tokens
+from jarvis.tools.filesystem import resolve_path
 from brain import JarvisBrain
 from jarvis.tools_registry import get_all_tools
 from jarvis.tool_selector import _build_tool_groups, _select_tools
 
-console = Console()
 
-MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:14b")
 MAX_TOOL_ROUNDS = int(os.environ.get("JARVIS_MAX_TOOL_ROUNDS", "12"))
 MAX_CONTEXT_MESSAGES = int(os.environ.get("JARVIS_MAX_CONTEXT_MESSAGES", "20"))
 MEMORY_UPDATE_EVERY = int(os.environ.get("JARVIS_MEMORY_UPDATE_EVERY", "5"))
@@ -139,7 +55,7 @@ UNDO_REDO_PATH = os.environ.get("JARVIS_UNDO_REDO_PATH", os.path.join(DEFAULT_AP
 def _cleanup_old_backups(max_age_days: int = 7) -> None:
     """Elimina backups con más de max_age_days días para no llenar el disco."""
     try:
-        from tools import _backup_base_dir
+        from jarvis.tools.core import _backup_base_dir
         base = _backup_base_dir()
         cutoff = time.time() - max_age_days * 86400
         files_cleaned = 0
@@ -207,11 +123,6 @@ def _save_undo_redo_state(state: dict[str, Any]) -> None:
         pass
 
 
-from jarvis.engine import (
-    prune_messages, run_tool_loop, run_simple_chat, console, MODEL
-)
-from jarvis.tools_registry import get_all_tools
-from jarvis.tool_selector import _build_tool_groups, _select_tools
 from jarvis.prompts import SYSTEM_PROMPT
 
 
@@ -248,31 +159,25 @@ def main():
 
     import sys
     if "--server" in sys.argv:
-        from http.server import BaseHTTPRequestHandler, HTTPServer
-        class JarvisAPI(BaseHTTPRequestHandler):
-            def do_POST(self):
-                if self.path == '/api/chat':
-                    length = int(self.headers.get('Content-Length', '0'))
-                    post_data = self.rfile.read(length)
-                    data = json.loads(post_data.decode('utf-8'))
-                    prompt = data.get('prompt', '')
-                    msgs = [{"role": "system", "content": SYSTEM_PROMPT}] + [{"role": "user", "content": prompt}]
-                    active = _select_tools(prompt, available_tools, tool_groups)
-                    reply = _run_tool_loop(msgs, active, tool_map, opts)
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/json; charset=utf-8')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"response": reply}, ensure_ascii=False).encode('utf-8'))
-                else:
-                    self.send_response(404)
-                    self.end_headers()
-        server_address = ('', 8080)
-        httpd = HTTPServer(server_address, JarvisAPI)
-        console.print("[bold green]Starting daemon server on port 8080...[/bold green]")
+        from jarvis.http_server import start_server
+
+        api_token = os.environ.get("JARVIS_API_TOKEN", "").strip() or None
+        max_body = os.environ.get("JARVIS_HTTP_MAX_BODY_BYTES", "").strip()
         try:
-            httpd.serve_forever()
-        except KeyboardInterrupt:
-            pass
+            max_body_bytes = int(max_body) if max_body else 1024 * 1024
+        except Exception:
+            max_body_bytes = 1024 * 1024
+
+        def _reply(prompt: str) -> str:
+            msgs = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ]
+            active = _select_tools(prompt, available_tools, tool_groups)
+            return run_tool_loop(msgs, active, tool_map, opts)
+
+        console.print("[bold green]Servidor HTTP activo (POST /api/chat, GET /health).[/bold green]")
+        start_server(_reply, api_token=api_token, max_body_bytes=max_body_bytes)
         return
 
 

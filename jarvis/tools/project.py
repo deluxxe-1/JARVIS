@@ -17,6 +17,7 @@ import time
 from contextlib import contextmanager
 
 from jarvis.tools.core import *
+from jarvis.tools.filesystem import resolve_path
 
 def detect_project(root: str = ".") -> str:
     """

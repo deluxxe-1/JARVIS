@@ -17,6 +17,16 @@ Asistente local tipo J.A.R.V.I.S. con:
 pip install -r requirements.txt
 ```
 
+### Instalación como paquete (recomendado)
+```bash
+pip install -e .
+```
+
+### Instalar todo (GUI + voz + OCR + system + web + dev)
+```bash
+pip install -e ".[all]"
+```
+
 ### GUI
 ```bash
 pip install -r requirements-gui.txt
@@ -37,6 +47,11 @@ pip install -r requirements-ocr.txt
 pip install -r requirements-system.txt
 ```
 
+### Web/Browser automation
+```bash
+pip install -r requirements-web.txt
+```
+
 ### Dev / tests
 ```bash
 pip install -r requirements-dev.txt
@@ -48,6 +63,11 @@ pytest
 ### CLI
 ```bash
 python main.py
+```
+
+O si lo instalas como paquete:
+```bash
+jarvis
 ```
 
 ### Ejecutar un prompt (útil para scripting)
@@ -63,6 +83,11 @@ python main.py --server
 ### GUI
 ```bash
 python gui.py
+```
+
+O si lo instalas como paquete:
+```bash
+jarvis-gui
 ```
 
 ## Variables de entorno (resumen)

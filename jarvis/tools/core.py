@@ -17,6 +17,10 @@ import time
 from contextlib import contextmanager
 
 
+_POLICY_CACHE: Optional[dict[str, Any]] = None
+_XDG_USER_DIRS_CACHE: Optional[dict[str, str]] = None
+
+
 
 def _norm_text(s: str) -> str:
     # Normaliza acentos y hace casefold para comparaciones robustas.
@@ -246,6 +250,7 @@ def _release_path_lock(lock_file: Path) -> None:
     except Exception:
         pass
 
+@contextmanager
 def _path_lock(abs_path: str):
     lock_file = _acquire_path_lock(abs_path)
     if lock_file is None:
@@ -471,3 +476,35 @@ def tool_result(status: str, data: Any = None, message: str = "") -> str:
     if message:
         result["message"] = message
     return json.dumps(result, ensure_ascii=False)
+
+
+__all__ = [
+    "_POLICY_CACHE",
+    "_norm_text",
+    "_is_relative_to",
+    "_read_only_mode",
+    "_read_only_allow_undo",
+    "_load_policy",
+    "_policy_forbidden_reason",
+    "_policy_require_confirm",
+    "policy_show",
+    "policy_set",
+    "policy_reset",
+    "_allow_symlink_escape",
+    "_symlink_escapes_home",
+    "_validate_symlink_for_path",
+    "_backup_base_dir",
+    "_ensure_backup_dirs",
+    "_lock_base_dir",
+    "_acquire_path_lock",
+    "_release_path_lock",
+    "_path_lock",
+    "_create_file_backup",
+    "_create_move_backup",
+    "_create_trash_backup",
+    "_load_xdg_user_dirs",
+    "_ensure_in_home_or_allow",
+    "rollback",
+    "rollback_tokens",
+    "tool_result",
+]

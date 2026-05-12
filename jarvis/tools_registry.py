@@ -226,11 +226,20 @@ SPECS: tuple[ToolSpec, ...] = (
 
 def iter_tools(specs: Iterable[ToolSpec] = SPECS) -> list[ToolFn]:
     import importlib
+    import logging
 
     out: list[ToolFn] = []
     seen: set[str] = set()
     for spec in specs:
-        mod = importlib.import_module(spec.module)
+        try:
+            mod = importlib.import_module(spec.module)
+        except Exception as e:
+            logging.getLogger("jarvis.tools_registry").warning(
+                "No se pudo importar %s (%s). Se omite este paquete de tools.",
+                spec.module,
+                e,
+            )
+            continue
         for name in spec.names:
             fn = getattr(mod, name, None)
             if fn is None:
@@ -245,4 +254,3 @@ def iter_tools(specs: Iterable[ToolSpec] = SPECS) -> list[ToolFn]:
 
 def get_all_tools() -> list[ToolFn]:
     return iter_tools()
-
