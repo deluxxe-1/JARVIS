@@ -1,5 +1,5 @@
 """
-Tests para JARVIS Productivity Module.
+Tests para AARIS Productivity Module.
 """
 
 import os
@@ -36,16 +36,16 @@ from productivity import (
 
 
 @pytest.fixture
-def tmp_jarvis_dir(tmp_path):
+def tmp_aaris_dir(tmp_path):
     """Redirige la persistencia a un directorio temporal."""
     import productivity
-    original_dir = productivity._JARVIS_DIR
+    original_dir = productivity._AARIS_DIR
     original_reminders = productivity.REMINDERS_PATH
     original_macros = productivity.MACROS_PATH
     original_vault = productivity.VAULT_PATH
     original_vault_meta = getattr(productivity, "VAULT_META_PATH", None)
 
-    productivity._JARVIS_DIR = tmp_path
+    productivity._AARIS_DIR = tmp_path
     productivity.REMINDERS_PATH = tmp_path / "reminders.json"
     productivity.MACROS_PATH = tmp_path / "macros.json"
     productivity.VAULT_PATH = tmp_path / "vault.enc"
@@ -53,7 +53,7 @@ def tmp_jarvis_dir(tmp_path):
 
     yield tmp_path
 
-    productivity._JARVIS_DIR = original_dir
+    productivity._AARIS_DIR = original_dir
     productivity.REMINDERS_PATH = original_reminders
     productivity.MACROS_PATH = original_macros
     productivity.VAULT_PATH = original_vault
@@ -66,21 +66,21 @@ def tmp_jarvis_dir(tmp_path):
 # ---------------------------------------------------------------------------
 
 class TestReminders:
-    def test_set_reminder_minutes(self, tmp_jarvis_dir):
+    def test_set_reminder_minutes(self, tmp_aaris_dir):
         result = set_reminder("Test reminder", minutes=5)
         data = json.loads(result)
         assert data["status"] == "ok"
         assert data["message"] == "Test reminder"
         assert data["in_minutes"] == 5
 
-    def test_set_reminder_at_time(self, tmp_jarvis_dir):
+    def test_set_reminder_at_time(self, tmp_aaris_dir):
         # Set for an hour from now
         future = (datetime.now() + timedelta(hours=1)).strftime("%H:%M")
         result = set_reminder("Meeting", at_time=future)
         data = json.loads(result)
         assert data["status"] == "ok"
 
-    def test_set_reminder_invalid_time(self, tmp_jarvis_dir):
+    def test_set_reminder_invalid_time(self, tmp_aaris_dir):
         result = set_reminder("Test", at_time="invalid")
         assert "Error" in result
 
@@ -92,30 +92,30 @@ class TestReminders:
         result = set_reminder("Test")
         assert "Error" in result
 
-    def test_list_reminders_empty(self, tmp_jarvis_dir):
+    def test_list_reminders_empty(self, tmp_aaris_dir):
         result = list_reminders()
         data = json.loads(result)
         assert data["total_pending"] == 0
 
-    def test_list_reminders_with_items(self, tmp_jarvis_dir):
+    def test_list_reminders_with_items(self, tmp_aaris_dir):
         set_reminder("Reminder 1", minutes=10)
         set_reminder("Reminder 2", minutes=20)
         result = list_reminders()
         data = json.loads(result)
         assert data["total_pending"] == 2
 
-    def test_cancel_reminder(self, tmp_jarvis_dir):
+    def test_cancel_reminder(self, tmp_aaris_dir):
         result = set_reminder("Cancel me", minutes=10)
         data = json.loads(result)
         rid = data["id"]
         cancel_result = cancel_reminder(rid)
         assert "cancelado" in cancel_result.lower()
 
-    def test_cancel_nonexistent(self, tmp_jarvis_dir):
+    def test_cancel_nonexistent(self, tmp_aaris_dir):
         result = cancel_reminder("nonexistent_id")
         assert "Error" in result
 
-    def test_set_timer(self, tmp_jarvis_dir):
+    def test_set_timer(self, tmp_aaris_dir):
         result = set_timer("Descanso", minutes=5)
         data = json.loads(result)
         assert data["status"] == "ok"
@@ -127,7 +127,7 @@ class TestReminders:
 # ---------------------------------------------------------------------------
 
 class TestMacros:
-    def test_list_macros_builtins(self, tmp_jarvis_dir):
+    def test_list_macros_builtins(self, tmp_aaris_dir):
         result = list_macros()
         data = json.loads(result)
         names = [m["name"] for m in data["macros"]]
@@ -135,7 +135,7 @@ class TestMacros:
         assert "gaming" in names
         assert "estudio" in names
 
-    def test_create_macro(self, tmp_jarvis_dir):
+    def test_create_macro(self, tmp_aaris_dir):
         steps = [
             {"action": "open_application", "args": {"app_name": "Chrome"}},
             {"action": "set_volume", "args": {"level": 50}},
@@ -150,33 +150,33 @@ class TestMacros:
         result = create_macro("", [])
         assert "Error" in result
 
-    def test_create_macro_invalid_action(self, tmp_jarvis_dir):
+    def test_create_macro_invalid_action(self, tmp_aaris_dir):
         steps = [{"action": "nonexistent_action", "args": {}}]
         result = create_macro("bad_macro", steps)
         assert "Error" in result
 
-    def test_create_macro_builtin_override(self, tmp_jarvis_dir):
+    def test_create_macro_builtin_override(self, tmp_aaris_dir):
         result = create_macro("trabajo", [{"action": "open_application", "args": {"app_name": "Chrome"}}])
         assert "Error" in result
         assert "built-in" in result.lower()
 
-    def test_delete_macro_requires_confirm(self, tmp_jarvis_dir):
+    def test_delete_macro_requires_confirm(self, tmp_aaris_dir):
         steps = [{"action": "open_application", "args": {"app_name": "Notepad"}}]
         create_macro("temp_macro", steps)
         result = delete_macro("temp_macro")
         assert "confirm" in result.lower()
 
-    def test_delete_macro_with_confirm(self, tmp_jarvis_dir):
+    def test_delete_macro_with_confirm(self, tmp_aaris_dir):
         steps = [{"action": "open_application", "args": {"app_name": "Notepad"}}]
         create_macro("temp_macro2", steps)
         result = delete_macro("temp_macro2", confirm=True)
         assert "eliminada" in result.lower()
 
-    def test_delete_builtin_macro(self, tmp_jarvis_dir):
+    def test_delete_builtin_macro(self, tmp_aaris_dir):
         result = delete_macro("trabajo", confirm=True)
         assert "Error" in result
 
-    def test_run_macro(self, tmp_jarvis_dir):
+    def test_run_macro(self, tmp_aaris_dir):
         steps = [
             {"action": "set_volume", "args": {"level": 50}},
         ]
@@ -187,7 +187,7 @@ class TestMacros:
             assert data["macro"] == "test_run"
             assert data["steps_executed"] == 1
 
-    def test_run_nonexistent_macro(self, tmp_jarvis_dir):
+    def test_run_nonexistent_macro(self, tmp_aaris_dir):
         result = run_macro("nonexistent")
         assert "Error" in result
 
@@ -224,14 +224,14 @@ class TestPasswords:
         result = generate_password(length=200)
         assert "Error" in result
 
-    def test_save_password_no_vault_key(self, tmp_jarvis_dir):
-        with patch.dict(os.environ, {"JARVIS_VAULT_KEY": ""}, clear=False):
+    def test_save_password_no_vault_key(self, tmp_aaris_dir):
+        with patch.dict(os.environ, {"AARIS_VAULT_KEY": ""}, clear=False):
             result = save_password("github", "user@test.com", "pass123")
             assert "Error" in result
             assert "VAULT_KEY" in result
 
-    def test_save_and_get_password(self, tmp_jarvis_dir):
-        with patch.dict(os.environ, {"JARVIS_VAULT_KEY": "test_master_key_123"}, clear=False):
+    def test_save_and_get_password(self, tmp_aaris_dir):
+        with patch.dict(os.environ, {"AARIS_VAULT_KEY": "test_master_key_123"}, clear=False):
             save_result = save_password("github", "user@test.com", "mypass123")
             data = json.loads(save_result)
             assert data["status"] == "ok"
@@ -242,8 +242,8 @@ class TestPasswords:
             assert get_data["username"] == "user@test.com"
             assert get_data["password"] == "mypass123"
 
-    def test_list_passwords(self, tmp_jarvis_dir):
-        with patch.dict(os.environ, {"JARVIS_VAULT_KEY": "test_key_456"}, clear=False):
+    def test_list_passwords(self, tmp_aaris_dir):
+        with patch.dict(os.environ, {"AARIS_VAULT_KEY": "test_key_456"}, clear=False):
             save_password("google", "me@gmail.com", "pass1")
             save_password("netflix", "me@net.com", "pass2")
             result = list_passwords()
@@ -256,8 +256,8 @@ class TestPasswords:
             for s in data["services"]:
                 assert "password" not in s or "password_length" in s
 
-    def test_delete_password(self, tmp_jarvis_dir):
-        with patch.dict(os.environ, {"JARVIS_VAULT_KEY": "test_key_789"}, clear=False):
+    def test_delete_password(self, tmp_aaris_dir):
+        with patch.dict(os.environ, {"AARIS_VAULT_KEY": "test_key_789"}, clear=False):
             save_password("temp_service", "user", "pass")
             # Without confirm
             result = delete_password("temp_service")
@@ -266,27 +266,27 @@ class TestPasswords:
             result2 = delete_password("temp_service", confirm=True)
             assert "eliminadas" in result2.lower()
 
-    def test_get_password_not_found(self, tmp_jarvis_dir):
-        with patch.dict(os.environ, {"JARVIS_VAULT_KEY": "test_key_000"}, clear=False):
+    def test_get_password_not_found(self, tmp_aaris_dir):
+        with patch.dict(os.environ, {"AARIS_VAULT_KEY": "test_key_000"}, clear=False):
             result = get_password("nonexistent_service")
             assert "Error" in result
 
-    def test_vault_meta_created_on_save(self, tmp_jarvis_dir):
+    def test_vault_meta_created_on_save(self, tmp_aaris_dir):
         import productivity
-        with patch.dict(os.environ, {"JARVIS_VAULT_KEY": "test_master_key_meta"}, clear=False):
+        with patch.dict(os.environ, {"AARIS_VAULT_KEY": "test_master_key_meta"}, clear=False):
             save_password("github", "user@test.com", "mypass123")
             assert productivity.VAULT_PATH.is_file()
             assert productivity.VAULT_META_PATH.is_file()
 
-    def test_rotate_vault_key(self, tmp_jarvis_dir):
-        with patch.dict(os.environ, {"JARVIS_VAULT_KEY": "old_key"}, clear=False):
+    def test_rotate_vault_key(self, tmp_aaris_dir):
+        with patch.dict(os.environ, {"AARIS_VAULT_KEY": "old_key"}, clear=False):
             save_password("github", "u", "p1")
             rotate_res = rotate_vault_key("new_key", confirm=True)
             data = json.loads(rotate_res)
             assert data["status"] == "ok"
 
         # Con la nueva key debe poder desencriptar
-        with patch.dict(os.environ, {"JARVIS_VAULT_KEY": "new_key"}, clear=False):
+        with patch.dict(os.environ, {"AARIS_VAULT_KEY": "new_key"}, clear=False):
             get_res = get_password("github")
             get_data = json.loads(get_res)
             assert get_data["password"] == "p1"

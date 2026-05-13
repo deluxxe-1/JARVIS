@@ -16,7 +16,7 @@ import hashlib
 import time
 from contextlib import contextmanager
 
-from jarvis.tools.core import *
+from aaris.tools.core import *
 
 def ast_list_functions(path: str) -> str:
     """

@@ -1,5 +1,5 @@
 """
-JARVIS Network Module — Escáner de red local y utilidades de conectividad.
+AARIS Network Module — Escáner de red local y utilidades de conectividad.
 
 Escanea dispositivos en la LAN, hace ping, comprueba puertos abiertos
 y diagnóstica la conexión a internet.

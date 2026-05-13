@@ -1,5 +1,5 @@
 """
-JARVIS Knowledge Base Module — Segundo cerebro persistente.
+AARIS Knowledge Base Module — Segundo cerebro persistente.
 
 Almacena notas, snippets y bookmarks con tags para búsqueda rápida.
 """
@@ -13,12 +13,12 @@ from pathlib import Path
 from typing import Optional, Any
 
 
-_JARVIS_DIR = Path(os.environ.get(
-    "JARVIS_APP_DIR",
-    os.path.join(os.path.expanduser("~"), ".jarvis"),
+_AARIS_DIR = Path(os.environ.get(
+    "AARIS_APP_DIR",
+    os.path.join(os.path.expanduser("~"), ".aaris"),
 ))
 
-KB_PATH = _JARVIS_DIR / "knowledge_base.json"
+KB_PATH = _AARIS_DIR / "knowledge_base.json"
 
 
 def _load_kb() -> list[dict[str, Any]]:
@@ -33,7 +33,7 @@ def _load_kb() -> list[dict[str, Any]]:
 
 
 def _save_kb(entries: list[dict[str, Any]]) -> None:
-    _JARVIS_DIR.mkdir(parents=True, exist_ok=True)
+    _AARIS_DIR.mkdir(parents=True, exist_ok=True)
     tmp = KB_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(KB_PATH)
@@ -64,7 +64,7 @@ def save_note(
     tags: str = "",
 ) -> str:
     """
-    Guarda una nota en la base de conocimiento de JARVIS.
+    Guarda una nota en la base de conocimiento de AARIS.
 
     Args:
         content: Contenido de la nota.

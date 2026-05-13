@@ -1,7 +1,7 @@
 """
-JARVIS Obsidian Module — Integración con vault de Obsidian.
+AARIS Obsidian Module — Integración con vault de Obsidian.
 
-Permite a JARVIS crear, leer, buscar y gestionar notas en formato Markdown
+Permite a AARIS crear, leer, buscar y gestionar notas en formato Markdown
 con frontmatter YAML. Compatible al 100% con Obsidian, Logseq y cualquier
 editor Markdown.
 
@@ -28,15 +28,15 @@ from typing import Optional, Any
 # Configuración
 # ---------------------------------------------------------------------------
 
-_JARVIS_DIR = Path(os.environ.get(
-    "JARVIS_APP_DIR",
-    os.path.join(os.path.expanduser("~"), ".jarvis"),
+_AARIS_DIR = Path(os.environ.get(
+    "AARIS_APP_DIR",
+    os.path.join(os.path.expanduser("~"), ".aaris"),
 ))
 
 # Usa el mismo vault que brain.py para unificar toda la memoria.
 VAULT_PATH = Path(os.environ.get(
-    "JARVIS_VAULT_PATH",
-    os.path.join(os.path.expanduser("~"), "JARVIS"),
+    "AARIS_VAULT_PATH",
+    os.path.join(os.path.expanduser("~"), "AARIS"),
 )).expanduser().resolve()
 
 _INDEX_PATH = VAULT_PATH / "_index.json"
@@ -211,7 +211,7 @@ def _remove_from_index(path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Funciones públicas (herramientas de JARVIS)
+# Funciones públicas (herramientas de AARIS)
 # ---------------------------------------------------------------------------
 
 def obsidian_create_note(
@@ -751,7 +751,7 @@ def migrate_kb_to_obsidian() -> str:
     Cada entrada se convierte en un archivo .md con frontmatter YAML.
     """
     try:
-        kb_path = _JARVIS_DIR / "knowledge_base.json"
+        kb_path = _AARIS_DIR / "knowledge_base.json"
         if not kb_path.is_file():
             return "No hay knowledge_base.json para migrar."
 

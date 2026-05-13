@@ -16,8 +16,8 @@ import hashlib
 import time
 from contextlib import contextmanager
 
-from jarvis.tools.core import *
-from jarvis.tools.filesystem import resolve_path
+from aaris.tools.core import *
+from aaris.tools.filesystem import resolve_path
 
 def detect_project(root: str = ".") -> str:
     """
@@ -127,14 +127,14 @@ def apply_template(template_name: str, destination: str, context_json: str = "{}
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. apply_template deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. apply_template deshabilitado."
         ctx = json.loads(context_json or "{}")
         if not isinstance(ctx, dict):
             ctx = {}
 
         template_dir = os.environ.get(
-            "JARVIS_TEMPLATE_DIR",
-            os.path.join(os.path.expanduser("~"), ".jarvis", "templates"),
+            "AARIS_TEMPLATE_DIR",
+            os.path.join(os.path.expanduser("~"), ".aaris", "templates"),
         )
         template_dir = os.path.abspath(os.path.expanduser(template_dir))
 
@@ -238,7 +238,7 @@ def scaffold_project(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. scaffold_project deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. scaffold_project deshabilitado."
 
         ptype = (project_type or "").strip().lower()
         if not ptype:
@@ -277,7 +277,7 @@ def scaffold_project(
                 "<body>\n"
                 "  <main class=\"container\">\n"
                 f"    <h1>{safe_name}</h1>\n"
-                "    <p>Proyecto creado por JARVIS.</p>\n"
+                "    <p>Proyecto creado por AARIS.</p>\n"
                 "    <button id=\"btn\">Probar</button>\n"
                 "    <pre id=\"out\"></pre>\n"
                 "  </main>\n"
@@ -329,7 +329,7 @@ def scaffold_project(
             (app_dir / "__init__.py").write_text("", encoding="utf-8")
             (app_dir / "main.py").write_text(
                 "from fastapi import FastAPI\n\n"
-                "app = FastAPI(title=\"jarvis-api\")\n\n"
+                "app = FastAPI(title=\"aaris-api\")\n\n"
                 "@app.get(\"/health\")\n"
                 "def health():\n"
                 "    return {\"status\": \"ok\"}\n",

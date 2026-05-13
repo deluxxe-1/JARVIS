@@ -1,5 +1,5 @@
 """
-JARVIS Undo/Redo State — persistent undo/redo tracking via JSON.
+AARIS Undo/Redo State — persistent undo/redo tracking via JSON.
 
 Manages a stack of rollback tokens so users can undo/redo file operations.
 """
@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_APP_DIR = os.environ.get("JARVIS_APP_DIR", os.path.join(os.getcwd(), ".jarvis"))
-UNDO_REDO_PATH = os.environ.get("JARVIS_UNDO_REDO_PATH", os.path.join(DEFAULT_APP_DIR, "undo_redo.json"))
+DEFAULT_APP_DIR = os.environ.get("AARIS_APP_DIR", os.path.join(os.getcwd(), ".aaris"))
+UNDO_REDO_PATH = os.environ.get("AARIS_UNDO_REDO_PATH", os.path.join(DEFAULT_APP_DIR, "undo_redo.json"))
 
 
 def _load_undo_redo_state() -> dict[str, Any]:

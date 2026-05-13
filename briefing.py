@@ -1,5 +1,5 @@
 """
-JARVIS Daily Briefing Module — Buenos días, señor.
+AARIS Daily Briefing Module — Buenos días, señor.
 
 Genera un resumen matutino personalizado con:
 - Clima, noticias, recordatorios, estado del sistema, crypto, etc.
@@ -15,8 +15,8 @@ from typing import Optional
 # Configuración
 # ---------------------------------------------------------------------------
 
-DEFAULT_CITY = os.environ.get("JARVIS_CITY", "Madrid")
-BRIEFING_CRYPTO = os.environ.get("JARVIS_BRIEFING_CRYPTO", "bitcoin")
+DEFAULT_CITY = os.environ.get("AARIS_CITY", "Madrid")
+BRIEFING_CRYPTO = os.environ.get("AARIS_BRIEFING_CRYPTO", "bitcoin")
 
 
 def daily_briefing(
@@ -26,11 +26,11 @@ def daily_briefing(
     include_system: bool = True,
 ) -> str:
     """
-    Genera el briefing diario de JARVIS — un resumen completo del estado del día.
+    Genera el briefing diario de AARIS — un resumen completo del estado del día.
     Incluye: clima, noticias, recordatorios pendientes, estado del sistema y crypto.
 
     Args:
-        city: Ciudad para el clima (por defecto usa JARVIS_CITY o 'Madrid').
+        city: Ciudad para el clima (por defecto usa AARIS_CITY o 'Madrid').
         include_crypto: Si incluir precio de criptomonedas.
         include_news: Si incluir titulares de noticias.
         include_system: Si incluir estado del sistema (CPU, RAM, disco, batería).
@@ -55,19 +55,22 @@ def daily_briefing(
         # --- Clima ---
         try:
             from apis import get_weather
-            weather_result = get_weather(city)
+            weather_result = get_weather(city, format="json")
             try:
                 w = json.loads(weather_result)
-                if "error" not in str(w).lower():
-                    temp = w.get("temperature", "?")
-                    desc = w.get("description", w.get("weather", "?"))
+                if isinstance(w, dict) and "Error" not in weather_result:
+                    temp = w.get("temperature_c")
+                    if temp is None:
+                        temp = w.get("temperature")
+                    desc = w.get("description") or w.get("weather") or "?"
                     humidity = w.get("humidity", "?")
-                    sections.append(f"## 🌤️ Clima en {city}")
+                    loc_label = w.get("location") or city
+                    sections.append(f"## 🌤️ Clima en {loc_label}")
                     sections.append(f"- Temperatura: **{temp}°C**")
                     sections.append(f"- Condición: {desc}")
                     sections.append(f"- Humedad: {humidity}%\n")
                 else:
-                    sections.append(f"## 🌤️ Clima: no disponible\n")
+                    sections.append("## 🌤️ Clima: no disponible\n")
             except (json.JSONDecodeError, TypeError):
                 sections.append(f"## 🌤️ Clima: {weather_result[:100]}\n")
         except Exception:
@@ -77,10 +80,16 @@ def daily_briefing(
         if include_news:
             try:
                 from apis import get_news
-                news_result = get_news(query="", country="es", max_results=5)
+                has_newsapi = bool(
+                    os.environ.get("AARIS_NEWSAPI_KEY") or os.environ.get("NEWSAPI_KEY")
+                )
+                if has_newsapi:
+                    news_result = get_news(category="headlines_es", max_items=5)
+                else:
+                    news_result = get_news("general_es", max_items=5)
                 try:
                     news = json.loads(news_result)
-                    articles = news.get("articles", [])
+                    articles = news.get("articles") or news.get("news", [])
                     if articles:
                         sections.append("## 📰 Titulares")
                         for i, art in enumerate(articles[:5], 1):

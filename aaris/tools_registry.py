@@ -15,7 +15,7 @@ class ToolSpec:
 
 SPECS: tuple[ToolSpec, ...] = (
     ToolSpec(
-        module="jarvis.tools.core",
+        module="aaris.tools.core",
         names=(
             "policy_show",
             "policy_set",
@@ -25,7 +25,7 @@ SPECS: tuple[ToolSpec, ...] = (
         ),
     ),
     ToolSpec(
-        module="jarvis.tools.filesystem",
+        module="aaris.tools.filesystem",
         names=(
             "create_file",
             "read_file",
@@ -52,7 +52,7 @@ SPECS: tuple[ToolSpec, ...] = (
         ),
     ),
     ToolSpec(
-        module="jarvis.tools.system",
+        module="aaris.tools.system",
         names=(
             "list_processes",
             "validate_python_syntax",
@@ -68,7 +68,7 @@ SPECS: tuple[ToolSpec, ...] = (
         ),
     ),
     ToolSpec(
-        module="jarvis.tools.project",
+        module="aaris.tools.project",
         names=(
             "detect_project",
             "project_workflow_suggest",
@@ -77,14 +77,14 @@ SPECS: tuple[ToolSpec, ...] = (
         ),
     ),
     ToolSpec(
-        module="jarvis.tools.search",
+        module="aaris.tools.search",
         names=(
             "build_text_index",
             "rag_query",
         ),
     ),
     ToolSpec(
-        module="jarvis.tools.docker",
+        module="aaris.tools.docker",
         names=(
             "docker_ps",
             "docker_logs",
@@ -92,20 +92,20 @@ SPECS: tuple[ToolSpec, ...] = (
         ),
     ),
     ToolSpec(
-        module="jarvis.tools.sqlite",
+        module="aaris.tools.sqlite",
         names=(
             "db_query_sqlite",
         ),
     ),
     ToolSpec(
-        module="jarvis.tools.ast_tools",
+        module="aaris.tools.ast_tools",
         names=(
             "ast_list_functions",
             "ast_read_function",
         ),
     ),
     ToolSpec(
-        module="jarvis.tools.agents",
+        module="aaris.tools.agents",
         names=(
             "delegate_task",
             "schedule_agent_task",
@@ -173,8 +173,10 @@ SPECS: tuple[ToolSpec, ...] = (
         names=(
             "screen_ocr",
             "image_ocr",
+            "vision_analyze_image",
             "extract_document_text",
             "summarize_document",
+            "document_ask",
             "semantic_search",
             "index_directory",
         ),
@@ -234,7 +236,7 @@ def iter_tools(specs: Iterable[ToolSpec] = SPECS) -> list[ToolFn]:
         try:
             mod = importlib.import_module(spec.module)
         except Exception as e:
-            logging.getLogger("jarvis.tools_registry").warning(
+            logging.getLogger("aaris.tools_registry").warning(
                 "No se pudo importar %s (%s). Se omite este paquete de tools.",
                 spec.module,
                 e,

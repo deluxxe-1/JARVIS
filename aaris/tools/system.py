@@ -16,8 +16,8 @@ import hashlib
 import time
 from contextlib import contextmanager
 
-from jarvis.tools.core import _read_only_mode, tool_result
-from jarvis.tools.filesystem import resolve_path
+from aaris.tools.core import _read_only_mode, tool_result
+from aaris.tools.filesystem import resolve_path
 
 def list_processes(limit: int = 30) -> str:
     """
@@ -110,7 +110,7 @@ def service_restart(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. service_restart deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. service_restart deshabilitado."
         if not shutil.which("systemctl"):
             return "Error: no existe `systemctl`."
         if not service_name or "/" in service_name:
@@ -211,7 +211,7 @@ def service_restart_with_deps(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. service_restart_with_deps deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. service_restart_with_deps deshabilitado."
         if not shutil.which("systemctl"):
             return "Error: no existe `systemctl`."
         if not service_name or "/" in service_name:
@@ -265,10 +265,28 @@ def run_command(
     Ejecuta un comando de shell. Usar con cuidado: el usuario es responsable de lo que ejecuta.
     Devuelve un JSON estructurado (tool_result) con el código de salida y output.
     Si el comando agota el tiempo (timeout), devuelve lo que haya impreso hasta ese momento.
+
+    En entornos **Windows**, evita invocar editores tipo `nano`/`vim` para crear código: suelen no existir;
+    para archivos de texto usa las herramientas `create_file` / `edit_file` del workspace.
     """
     try:
         if _read_only_mode():
-            return tool_result("error", message="JARVIS_READ_ONLY=true. run_command deshabilitado.")
+            return tool_result("error", message="AARIS_READ_ONLY=true. run_command deshabilitado.")
+
+        if os.name == "nt" and os.environ.get("AARIS_ALLOW_UNIX_EDITORS", "").strip().lower() not in (
+            "1", "true", "yes", "si", "sí", "on",
+        ):
+            cmd0 = (command or "").strip()
+            if cmd0 and re.match(r"^(nano|vim|vi)\b", cmd0, re.IGNORECASE):
+                return tool_result(
+                    "error",
+                    message=(
+                        "En Windows `nano`/`vim`/`vi` no suelen estar en el PATH. "
+                        "Use `create_file`, `edit_file` o `search_replace_in_file` para crear o modificar archivos. "
+                        "Editor del sistema (opcional): `notepad \"ruta\"`. "
+                        "Para permitir estos comandos: AARIS_ALLOW_UNIX_EDITORS=true."
+                    ),
+                )
 
         if not allow_dangerous:
             dangerous_patterns = [
@@ -277,19 +295,18 @@ def run_command(
                 r"\bkillall\b.*\b-9\b", r"\bkill\s+-9\b.*\b-1\b", r"\b:(){\s*:|\s*&};\s*:", r"\bxargs\b.*\brm\b"
             ]
             for pat in dangerous_patterns:
-                import re
                 if re.search(pat, command):
                     return tool_result("error", message="Comando destructivo detectado. Usa allow_dangerous=true para forzar.")
 
-        allowlist_only = os.environ.get("JARVIS_COMMAND_ALLOWLIST_ONLY", "false").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
+        allowlist_only = os.environ.get("AARIS_COMMAND_ALLOWLIST_ONLY", "false").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
         if allowlist_only:
-            allowlist_raw = os.environ.get("JARVIS_COMMAND_ALLOWLIST", "ls,cat,head,tail,stat,du,df,rg,systemctl,journalctl,ps,pwd,echo,whoami")
+            allowlist_raw = os.environ.get("AARIS_COMMAND_ALLOWLIST", "ls,cat,head,tail,stat,du,df,rg,systemctl,journalctl,ps,pwd,echo,whoami")
             allowed = {x.strip() for x in allowlist_raw.split(",") if x.strip()}
             cmd = (command or "").strip()
             if cmd.startswith("sudo "): cmd = cmd[len("sudo "):].lstrip()
             disallowed_chars = ["|", ";", "&&", "||", ">", "<", "\n", "\r", "`", "$(", "&"]
             for token in disallowed_chars:
-                if token in cmd: return tool_result("error", message="JARVIS_COMMAND_ALLOWLIST_ONLY no permite operadores de shell.")
+                if token in cmd: return tool_result("error", message="AARIS_COMMAND_ALLOWLIST_ONLY no permite operadores de shell.")
             parts = cmd.split()
             first = parts[0] if parts else ""
             if first and first not in allowed: return tool_result("error", message=f"Comando no permitido: {first}")
@@ -345,7 +362,7 @@ def run_command_checked(
     """
     try:
         if _read_only_mode():
-            return tool_result("error", message="JARVIS_READ_ONLY=true. run_command_checked deshabilitado.")
+            return tool_result("error", message="AARIS_READ_ONLY=true. run_command_checked deshabilitado.")
 
         # run_command ya devuelve un JSON (tool_result), así que simplemente delegamos
         return run_command(
@@ -425,7 +442,7 @@ def install_packages(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. install_packages deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. install_packages deshabilitado."
 
         tokens = [t.strip() for t in (packages or "").replace(";", ",").replace("|", ",").split(",")]
         tokens = [t for t in tokens if t]

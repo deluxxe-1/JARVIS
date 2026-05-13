@@ -16,7 +16,7 @@ import hashlib
 import time
 from contextlib import contextmanager
 
-from jarvis.tools.core import *
+from aaris.tools.core import *
 
 def delegate_task(prompt: str) -> str:
     """Delega una tarea a una nueva instancia del agente ejecutando main.py --run-prompt."""
@@ -38,10 +38,10 @@ def schedule_agent_task(cron_expr: str, prompt: str, task_name: str) -> str:
         agent_script = str(Path(__file__).resolve().parent / "main.py")
         import shlex, sys
         prompt_q = shlex.quote(prompt)
-        command = f"{sys.executable} {agent_script} --run-prompt {prompt_q} >> ~/.jarvis/cron.log 2>&1"
+        command = f"{sys.executable} {agent_script} --run-prompt {prompt_q} >> ~/.aaris/cron.log 2>&1"
         cron_line = f"{cron_expr} {command}\n"
         
-        cron_file = Path.home() / ".jarvis" / "crontab.txt"
+        cron_file = Path.home() / ".aaris" / "crontab.txt"
         cron_file.parent.mkdir(parents=True, exist_ok=True)
         
         proc = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
@@ -50,7 +50,7 @@ def schedule_agent_task(cron_expr: str, prompt: str, task_name: str) -> str:
         if cron_line in current_cron:
             return f"Tarea '{task_name}' ya estaba programada."
             
-        new_cron = current_cron.strip() + "\n" + f"# JARVIS_TASK: {task_name}\n{cron_line}"
+        new_cron = current_cron.strip() + "\n" + f"# AARIS_TASK: {task_name}\n{cron_line}"
         cron_file.write_text(new_cron, encoding="utf-8")
         
         apply_proc = subprocess.run(["crontab", str(cron_file)], capture_output=True, text=True)

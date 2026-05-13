@@ -1,5 +1,5 @@
 """
-Tests para los 5 módulos nuevos de JARVIS:
+Tests para los 5 módulos nuevos de AARIS:
 git_tools, guard, knowledge, windows, scraper.
 """
 
@@ -112,7 +112,7 @@ class TestGuard:
 
     def test_set_threshold(self, tmp_path):
         with patch("guard.GUARD_CONFIG_PATH", tmp_path / "guard.json"):
-            with patch("guard._JARVIS_DIR", tmp_path):
+            with patch("guard._AARIS_DIR", tmp_path):
                 result = set_guard_threshold(cpu_percent=80, ram_percent=70)
                 data = json.loads(result)
                 assert data["status"] == "ok"
@@ -121,7 +121,7 @@ class TestGuard:
 
     def test_set_threshold_clamp(self, tmp_path):
         with patch("guard.GUARD_CONFIG_PATH", tmp_path / "guard.json"):
-            with patch("guard._JARVIS_DIR", tmp_path):
+            with patch("guard._AARIS_DIR", tmp_path):
                 result = set_guard_threshold(cpu_percent=5)
                 data = json.loads(result)
                 # Should be clamped to 10
@@ -155,7 +155,7 @@ class TestKnowledge:
 
     def test_save_note(self, tmp_path):
         with patch("knowledge.KB_PATH", tmp_path / "kb.json"):
-            with patch("knowledge._JARVIS_DIR", tmp_path):
+            with patch("knowledge._AARIS_DIR", tmp_path):
                 result = save_note("El servidor está en 10.0.0.5", title="Server IP", tags="infra,prod")
                 data = json.loads(result)
                 assert data["status"] == "ok"
@@ -163,7 +163,7 @@ class TestKnowledge:
 
     def test_save_bookmark(self, tmp_path):
         with patch("knowledge.KB_PATH", tmp_path / "kb.json"):
-            with patch("knowledge._JARVIS_DIR", tmp_path):
+            with patch("knowledge._AARIS_DIR", tmp_path):
                 result = save_bookmark("https://github.com", title="GitHub")
                 data = json.loads(result)
                 assert data["status"] == "ok"
@@ -171,7 +171,7 @@ class TestKnowledge:
 
     def test_save_snippet(self, tmp_path):
         with patch("knowledge.KB_PATH", tmp_path / "kb.json"):
-            with patch("knowledge._JARVIS_DIR", tmp_path):
+            with patch("knowledge._AARIS_DIR", tmp_path):
                 result = save_snippet("print('hi')", language="python", title="Hello")
                 data = json.loads(result)
                 assert data["status"] == "ok"
@@ -180,7 +180,7 @@ class TestKnowledge:
     def test_save_and_search(self, tmp_path):
         kb_path = tmp_path / "kb.json"
         with patch("knowledge.KB_PATH", kb_path):
-            with patch("knowledge._JARVIS_DIR", tmp_path):
+            with patch("knowledge._AARIS_DIR", tmp_path):
                 save_note("El servidor prod está en 10.0.0.5", title="Server", tags="infra")
                 save_note("El gato duerme en el sofá", title="Random", tags="personal")
 
@@ -192,7 +192,7 @@ class TestKnowledge:
     def test_search_by_tag(self, tmp_path):
         kb_path = tmp_path / "kb.json"
         with patch("knowledge.KB_PATH", kb_path):
-            with patch("knowledge._JARVIS_DIR", tmp_path):
+            with patch("knowledge._AARIS_DIR", tmp_path):
                 save_note("Nota 1", tags="trabajo")
                 save_note("Nota 2", tags="personal")
 
@@ -202,14 +202,14 @@ class TestKnowledge:
 
     def test_delete_requires_confirm(self, tmp_path):
         with patch("knowledge.KB_PATH", tmp_path / "kb.json"):
-            with patch("knowledge._JARVIS_DIR", tmp_path):
+            with patch("knowledge._AARIS_DIR", tmp_path):
                 result = delete_knowledge("abc123")
                 assert "Confirmación" in result or "confirm" in result.lower()
 
     def test_list_tags(self, tmp_path):
         kb_path = tmp_path / "kb.json"
         with patch("knowledge.KB_PATH", kb_path):
-            with patch("knowledge._JARVIS_DIR", tmp_path):
+            with patch("knowledge._AARIS_DIR", tmp_path):
                 save_note("Test", tags="alpha,beta")
                 save_note("Test 2", tags="alpha,gamma")
 

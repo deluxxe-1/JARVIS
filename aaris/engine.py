@@ -1,19 +1,86 @@
 from __future__ import annotations
+import difflib
 import json
 import os
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any
 from rich.console import Console
+from rich.prompt import Prompt
 from ollama import chat
 
-from jarvis.logging import configure_logging
-from jarvis.tool_selector import _build_tool_groups, _select_tools
-from jarvis.prompts import SYSTEM_PROMPT
+from aaris.logging import configure_logging
+from aaris.tool_selector import _build_tool_groups, _select_tools
+from aaris.prompts import get_system_prompt
+
+
+def refresh_system_prompt() -> str:
+    """Recalcula el system prompt (rutas por defecto, etc.). Útil al arrancar la GUI tras cambiar env."""
+    global SYSTEM_PROMPT
+    SYSTEM_PROMPT = get_system_prompt()
+    return SYSTEM_PROMPT
+
+
+SYSTEM_PROMPT = refresh_system_prompt()
+
+
+def _redact_tool_arguments_for_log(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Acorta contenidos largos y oculta claves que suelen llevar secretos (solo para consola)."""
+    sens = ("token", "password", "secret", "apikey", "api_key", "authorization", "credential", "bearer")
+    out: dict[str, Any] = {}
+    for k, v in arguments.items():
+        lk = str(k).lower()
+        if any(s in lk for s in sens):
+            out[k] = "***"
+        elif lk == "content" and isinstance(v, str) and len(v) > 200:
+            out[k] = v[:120] + f"… ({len(v)} caracteres)"
+        elif isinstance(v, dict):
+            inner: dict[str, Any] = {}
+            for k2, v2 in v.items():
+                lk2 = str(k2).lower()
+                if any(s in lk2 for s in sens):
+                    inner[k2] = "***"
+                else:
+                    inner[k2] = v2
+            out[k] = inner
+        else:
+            out[k] = v
+    return out
+
+
+def _now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _get_tool_helpers():
+    """Importa funciones de herramientas de filesystem usadas para previews."""
+    try:
+        from aaris.tools.filesystem import (
+            resolve_path, describe_path, read_file,
+            estimate_dir, count_dir_children_matches,
+        )
+        return resolve_path, describe_path, read_file, estimate_dir, count_dir_children_matches
+    except ImportError:
+        return None, None, None, None, None
+
+
+# Importar helpers — disponibles como funciones de módulo
+resolve_path, describe_path, read_file, estimate_dir, count_dir_children_matches = _get_tool_helpers()
+
 
 console = Console()
 MAX_CONTEXT_MESSAGES = 10
-MODEL = os.environ.get("JARVIS_MODEL", "qwen2.5:14b")
+MODEL = os.environ.get("AARIS_MODEL", "qwen2.5:14b")
+MAX_TOOL_ROUNDS = int(os.environ.get("AARIS_MAX_TOOL_ROUNDS", "12"))
+PLAN_MODE = os.environ.get("AARIS_PLAN_MODE", "off")  # off | auto | confirm
+DRY_RUN = os.environ.get("AARIS_DRY_RUN", "false").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
+PREVIEW_MUTATIONS = os.environ.get("AARIS_PREVIEW_MUTATIONS", "true").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
+PREVIEW_CONFIRM_ALWAYS = os.environ.get("AARIS_PREVIEW_CONFIRM_ALWAYS", "false").strip().lower() in (
+    "1", "true", "yes", "si", "sí", "on",
+)
+DIFF_MAX_LINES = int(os.environ.get("AARIS_DIFF_MAX_LINES", "300"))
+
 
 def _prune_messages(messages: list[dict[str, Any]], keep_last: int) -> list[dict[str, Any]]:
     if len(messages) <= keep_last:
@@ -122,6 +189,22 @@ def _update_memory(
         return memory
 
 
+def _garbled_model_reply(text: str) -> bool:
+    """Detecta salidas corruptas del modelo (p. ej. spam 'sourceMapping') sin tool calls."""
+    t = (text or "").strip()
+    if len(t) < 120:
+        return False
+    low = t.lower()
+    if low.count("sourcemapping") >= 6:
+        return True
+    words = t.split()
+    if len(words) > 60:
+        uniq = len(set(w.strip() for w in words if w.strip()))
+        if uniq <= 3:
+            return True
+    return False
+
+
 def _normalize_tool_arguments(raw: Any) -> dict[str, Any]:
     if raw is None:
         return {}
@@ -155,14 +238,17 @@ def _run_tool_loop(
     _tool_reinforcement = {
         "role": "system",
         "content": (
-            "INSTRUCCIÓN CRÍTICA: El usuario ha pedido una acción. "
-            "DEBES llamar a la herramienta apropiada AHORA MISMO. "
-            "NO expliques cómo se haría. NO escribas texto antes de llamar la tool. "
-            "USA la función disponible directamente."
+            "INSTRUCCIÓN CRÍTICA (español): El usuario pidió acciones concretas. "
+            "Invoca YA las herramientas nativas (tool calls): sin pedir JSON al usuario, sin preguntar qué función usar, sin texto en inglés. "
+            "NO escribas explicaciones antes. Orden típico si aplica: resolve_path → create_folder; código sin ruta del usuario → subcarpeta bajo Documentos/Proyectos/<slug>; scripts triviales (p. ej. calculadora) → **solo** `create_file`, sin scaffold ni API; **en Windows no uses `nano`/`vim` en run_command** para editar — usa `create_file`/`edit_file`; web_search_full(query=...); create_file para HTML. "
+            "Varias tareas en un mensaje = varias llamadas a tools en secuencia. Prohibido run_command de prueba salvo petición explícita."
         ),
     }
     # Solo inyectar si el último mensaje es del usuario (no repetir en rounds sucesivos)
     _reinforcement_injected = False
+    # Reintentos si el modelo responde con meta-texto en vez de invocar tools
+    _bogus_tool_reply_retries = 0
+    _max_bogus_retries = 2
 
     # Temperatura baja para tool calling — los modelos locales son más precisos con <0.3
     _tool_options = dict(options or {})
@@ -186,38 +272,96 @@ def _run_tool_loop(
         messages.append(response_message)
 
         tool_calls = response_message.get("tool_calls") or []
+        
+        # --- Fallback: Detectar llamadas escritas como texto plano ---
+        content = response_message.get("content") or ""
+        if not tool_calls and ("_icall_" in content or "web_search" in content):
+            # Buscar patrones como _icall_web_search_full("query") o web_search(query="...")
+            match = re.search(r'(?:_icall_)?(\w+)\s*\((.*)\)', content)
+            if match:
+                fn_name = match.group(1)
+                raw_args = match.group(2)
+                
+                # Intentar limpiar argumentos (muy básico)
+                clean_args = {}
+                if "query=" in raw_args:
+                    m_arg = re.search(r'query=["\'](.*?)["\']', raw_args)
+                    if m_arg: clean_args["query"] = m_arg.group(1)
+                elif '"' in raw_args or "'" in raw_args:
+                    m_arg = re.search(r'["\'](.*?)["\']', raw_args)
+                    if m_arg: clean_args["query" if "search" in fn_name else "text"] = m_arg.group(1)
+                
+                if fn_name in tool_map:
+                    tool_calls = [{"function": {"name": fn_name, "arguments": clean_args}}]
+                    console.print(f"[dim yellow]⚠ Fallback detectado: {fn_name}[/dim yellow]")
+
         if not tool_calls:
             reply_content = response_message.get("content") or ""
-            # Si es el primer round y el modelo no llamó ninguna tool pero había tools disponibles,
-            # inyectar un retry más directo (solo una vez para no entrar en loop infinito).
-            if rounds == 1 and available_tools and reply_content.strip():
-                # Detectar si la respuesta es una explicación en lugar de una acción
+            # Modelo respondió en texto en vez de invocar tools: reintentar con instrucción dura.
+            if available_tools and reply_content.strip() and _bogus_tool_reply_retries < _max_bogus_retries:
+                lc = reply_content.lower()
                 _explaining_indicators = [
                     "puedes usar", "podrías usar", "para crear", "para hacer",
                     "el comando", "deberías", "necesitas", "tienes que",
                     "para ello", "primero", "simplemente",
                     "you can", "you could", "to create", "to make",
                 ]
-                _is_explaining = any(ind in reply_content.lower() for ind in _explaining_indicators)
-                if _is_explaining:
-                    console.print("[dim yellow]⚠ El modelo explicó en lugar de actuar. Forzando retry con tool...[/dim yellow]")
+                _meta_tool_refusal = any(
+                    p in lc
+                    for p in (
+                        "could you please",
+                        "could you",
+                        "which tool",
+                        "what tool",
+                        "specify which",
+                        "function you would",
+                        "function call",
+                        "json object",
+                        "json for",
+                        "necessary parameters",
+                        "let me know",
+                        "provide you with",
+                        "along with any",
+                        "format it accordingly",
+                        "tell me which",
+                    )
+                )
+                _is_explaining = any(ind in lc for ind in _explaining_indicators)
+                _garbled = _garbled_model_reply(reply_content)
+                if _is_explaining or _meta_tool_refusal or _garbled:
+                    _bogus_tool_reply_retries += 1
+                    reason = "salida basura/repetitiva" if _garbled else "explicación o pedido de JSON/tools"
+                    console.print(
+                        f"[dim yellow]⚠ El modelo no invocó herramientas ({reason}). "
+                        "Reintento forzado…[/dim yellow]"
+                    )
+                    extra = ""
+                    if _garbled:
+                        extra = (
+                            " No escribas 'sourceMapping' ni basura repetida. "
+                            "Si debes entregar una web, usa create_file con HTML válido (español), no pegues mapas de fuentes."
+                        )
                     messages.append({
                         "role": "system",
                         "content": (
-                            "No expliques cómo hacer la tarea. EJECUTA la acción directamente "
-                            "llamando a la herramienta adecuada AHORA. El usuario espera que actúes, no que expliques."
+                            "PARA. No pidas al usuario que elija herramienta ni que escriba JSON. "
+                            "No respondas en inglés. Usa SOLO las funciones disponibles (tool calls nativos): "
+                            "por ejemplo resolve_path → create_folder, web_search_full(query=...), "
+                            "create_file(path=..., content=...) para HTML. "
+                            "Llama ya a la primera herramienta necesaria sin texto previo."
+                            + extra
                         ),
                     })
-                    # Quitar la respuesta explicativa del historial para no confundir
-                    messages.pop(-2)  # quitar response_message
-                    continue  # reintentar sin contar este round
+                    messages.pop(-2)  # quitar response_message vacía de tool_calls
+                    continue
             break
 
         for tool_call in tool_calls:
             fn = tool_call.get("function") or {}
             function_name = fn.get("name") or ""
             arguments = _normalize_tool_arguments(fn.get("arguments"))
-            args_preview = json.dumps(arguments, ensure_ascii=False)
+            safe_args = _redact_tool_arguments_for_log(arguments)
+            args_preview = json.dumps(safe_args, ensure_ascii=False)
             if len(args_preview) > 500:
                 args_preview = args_preview[:500] + "…"
 
@@ -419,7 +563,7 @@ def _run_tool_loop(
                             console.print("[bold yellow]Resolución de ruta ambigua:[/bold yellow]")
                             for i, c in enumerate(candidates[:10]):
                                 console.print(f"{i+1}. {c.get('name')} (score={c.get('score')}) -> {c.get('path')}")
-                            auto_pref = os.environ.get("JARVIS_AUTO_RESOLVE_AMBIGUOUS", "").strip().lower()
+                            auto_pref = os.environ.get("AARIS_AUTO_RESOLVE_AMBIGUOUS", "").strip().lower()
                             chosen_path = None
                             if auto_pref in ("", "none", "off"):
                                 ans = Prompt.ask("Elige número", default="1").strip()
@@ -489,7 +633,7 @@ def _run_tool_loop(
 
             if (
                 str(result).startswith("Error")
-                and os.environ.get("JARVIS_TOOL_ERROR_HINT", "true").strip().lower()
+                and os.environ.get("AARIS_TOOL_ERROR_HINT", "true").strip().lower()
                 in ("1", "true", "yes", "si", "sí", "on")
             ):
                 messages.append({
@@ -501,26 +645,47 @@ def _run_tool_loop(
                     ),
                 })
 
-        if rounds >= MAX_TOOL_ROUNDS:
-            hit_round_limit = True
-            break
-
-    if hit_round_limit and not reply_content.strip():
+    # Si terminamos el loop y no hay contenido, pero se usaron herramientas, 
+    # o si alcanzamos el límite de rondas, forzamos una síntesis final.
+    tools_were_used = rounds > 1 or (rounds == 1 and tool_calls)
+    
+    if (hit_round_limit or (tools_were_used and not reply_content.strip())):
+        # Si no hay respuesta, intentamos una última vez con un prompt muy agresivo
         messages.append({
             "role": "user",
-            "content": "Resume en español qué hiciste y qué falta; no llames más herramientas en esta respuesta.",
+            "content": "IMPORTANTE: Tienes los resultados de la búsqueda arriba. Explícame qué has encontrado en español de forma detallada. NO respondas con texto vacío.",
         })
-        with console.status("[bold cyan]Síntesis…[/bold cyan]", spinner="dots"):
+        with console.status("[bold cyan]Generando resumen final...[/bold cyan]", spinner="dots"):
             final = chat(model=MODEL, messages=messages, options=options or None)
-        final_msg = final["message"]
-        messages.append(final_msg)
-        reply_content = final_msg.get("content") or ""
+        
+        reply_content = final["message"].get("content") or ""
+        
+        # SI SIGUE VACÍO: Fallback de emergencia — mostrar los datos crudos
+        if not reply_content.strip() and tools_were_used:
+            console.print("[red]⚠ El modelo no generó resumen. Usando fallback de datos crudos.[/red]")
+            # Buscar el último resultado de herramienta exitoso
+            last_tool_res = ""
+            for m in reversed(messages):
+                if m.get("role") == "tool" and m.get("content"):
+                    last_tool_res = m.get("content")
+                    break
+            
+            if last_tool_res:
+                try:
+                    # Si es JSON, intentar embellecerlo un poco
+                    data = json.loads(last_tool_res)
+                    if isinstance(data, dict) and "results" in data:
+                        res_list = []
+                        for r in data["results"][:3]:
+                            res_list.append(f"- {r.get('title')}: {r.get('snippet')}")
+                        reply_content = "El modelo no pudo resumir la información, pero aquí están los resultados directos:\n\n" + "\n".join(res_list)
+                    else:
+                        reply_content = f"Resultados encontrados:\n\n{last_tool_res[:1000]}"
+                except:
+                    reply_content = f"Resultados encontrados:\n\n{last_tool_res[:1000]}"
 
-    if hit_round_limit and not reply_content.strip():
-        reply_content = (
-            "Se alcanzó el límite de rondas de herramientas (JARVIS_MAX_TOOL_ROUNDS). "
-            "Repite la petición o aumenta el límite."
-        )
+    if not reply_content.strip():
+        reply_content = "No he podido obtener una respuesta clara del modelo de IA, aunque las herramientas se ejecutaron. Por favor, revisa la consola para más detalles."
 
     return reply_content
 
@@ -544,12 +709,19 @@ def _is_simple_conversational(text: str) -> bool:
         "escáner", "escanea", "verifica", "comprueba", "analiza",
         "traduce", "resume", "convierte", "extrae", "procesa",
         "git", "commit", "docker", "sqlite", "ping", "npm", "pip",
+        # Preguntas factuales / investigación → no charla simple (usar tools, p. ej. web)
+        "qué es", "que es", "quién es", "quien es", "qué son", "que son",
+        "información sobre", "informacion sobre", "investiga", "averigua",
+        "dime sobre", "cuéntame sobre", "cuentame sobre", "haz una búsqueda",
+        "what is", "who is", "who are", "tell me about", "look up", "search for",
+        "define ", "definición", "definicion", "wikipedia", "en internet",
+        "[adjuntos aaris]",
     ]
     if any(k in s for k in action_blocklist):
         return False
 
     simple_patterns = [
-        r"^hola",
+        r"^hola\b",
         r"^(qu[eé] eres|qui[eé]n eres)",
         r"^(qu[eé] puedes hacer|qu[eé] sabes hacer)",
         r"^(buenos? d[ií]as?|buenas? tardes?|buenas? noches?)",
@@ -595,5 +767,5 @@ def run_simple_chat(messages: list, options: dict) -> str:
 
 def main() -> None:
     configure_logging()
-    from jarvis.cli import main as cli_main
+    from aaris.cli import main as cli_main
     cli_main()

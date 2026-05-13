@@ -1,17 +1,17 @@
 """
-JARVIS Brain Module — Cerebro central usando Obsidian como backend.
+AARIS Brain Module — Cerebro central usando Obsidian como backend.
 
-Todo lo que JARVIS recuerda, aprende, registra y consulta pasa por aquí.
-El vault de Obsidian en C:\\Users\\deluxXe\\JARVIS es la única fuente de verdad.
+Todo lo que AARIS recuerda, aprende, registra y consulta pasa por aquí.
+El vault de Obsidian en C:\\Users\\deluxXe\\AARIS es la única fuente de verdad.
 
 Estructura del vault que este módulo crea automáticamente:
-    JARVIS/
+    AARIS/
     ├── Config/
-    │   ├── settings.md          ← configuración de JARVIS
+    │   ├── settings.md          ← configuración de AARIS
     │   └── user_profile.md      ← quién eres, preferencias
     ├── Memory/
     │   ├── long_term.md         ← hechos importantes permanentes
-    │   └── learned_facts.md     ← cosas que JARVIS aprendió de ti
+    │   └── learned_facts.md     ← cosas que AARIS aprendió de ti
     ├── Sessions/
     │   └── YYYY-MM-DD_N.md      ← una nota por sesión
     ├── Tasks/
@@ -42,8 +42,8 @@ from typing import Any, Optional
 # ---------------------------------------------------------------------------
 
 VAULT_PATH = Path(os.environ.get(
-    "JARVIS_VAULT_PATH",
-    os.path.join(os.path.expanduser("~"), "JARVIS"),
+    "AARIS_VAULT_PATH",
+    os.path.join(os.path.expanduser("~"), "AARIS"),
 )).expanduser().resolve()
 
 # Carpetas principales del vault
@@ -151,7 +151,7 @@ def _frontmatter(meta: dict[str, Any]) -> str:
 def setup_vault() -> str:
     """
     Crea la estructura completa del vault si no existe.
-    Llámalo una vez al arrancar JARVIS.
+    Llámalo una vez al arrancar AARIS.
     """
     try:
         VAULT_PATH.mkdir(parents=True, exist_ok=True)
@@ -168,9 +168,9 @@ def setup_vault() -> str:
                 "created": _today(),
             }) + """
 
-# ⚙️ JARVIS Settings
+# ⚙️ AARIS Settings
 
-Edita este archivo desde Obsidian para cambiar el comportamiento de JARVIS.
+Edita este archivo desde Obsidian para cambiar el comportamiento de AARIS.
 
 ## Modelo
 ```
@@ -192,7 +192,7 @@ plan_mode: off
 
 ## Personalidad
 ```
-name: J.A.R.V.I.S.
+name: A.A.R.I.S.
 tone: formal
 address_user_as: señor
 ```
@@ -210,7 +210,7 @@ address_user_as: señor
 
 # 👤 Perfil de Usuario
 
-JARVIS actualiza este archivo automáticamente cuando aprende algo nuevo sobre ti.
+AARIS actualiza este archivo automáticamente cuando aprende algo nuevo sobre ti.
 También puedes editarlo directamente desde Obsidian.
 
 ## Información básica
@@ -224,10 +224,10 @@ También puedes editarlo directamente desde Obsidian.
 - **Sistema operativo**: Windows
 
 ## Proyectos activos
-*(JARVIS irá añadiendo proyectos aquí)*
+*(AARIS irá añadiendo proyectos aquí)*
 
 ## Notas adicionales
-*(JARVIS añadirá observaciones aquí)*
+*(AARIS añadirá observaciones aquí)*
 """
             _write(profile_path, content)
 
@@ -243,7 +243,7 @@ También puedes editarlo directamente desde Obsidian.
 
 # 🧠 Memoria a Largo Plazo
 
-JARVIS escribe aquí los hechos más importantes que no debe olvidar nunca.
+AARIS escribe aquí los hechos más importantes que no debe olvidar nunca.
 
 ---
 
@@ -262,7 +262,7 @@ JARVIS escribe aquí los hechos más importantes que no debe olvidar nunca.
 
 # 💡 Hechos Aprendidos
 
-Cosas que JARVIS ha aprendido durante las conversaciones.
+Cosas que AARIS ha aprendido durante las conversaciones.
 
 | Fecha | Hecho | Importancia |
 |-------|-------|-------------|
@@ -281,7 +281,7 @@ Cosas que JARVIS ha aprendido durante las conversaciones.
 
 # 📋 Tareas Pendientes
 
-JARVIS gestiona esta lista automáticamente.
+AARIS gestiona esta lista automáticamente.
 Usa `- [ ]` para tareas pendientes y `- [x]` para completadas.
 
 ---
@@ -334,7 +334,7 @@ Usa `- [ ]` para tareas pendientes y `- [x]` para completadas.
 
 # 📝 Registro de Acciones
 
-Todas las acciones que JARVIS ha ejecutado.
+Todas las acciones que AARIS ha ejecutado.
 
 | Fecha/Hora | Acción | Detalle |
 |------------|--------|---------|
@@ -358,7 +358,7 @@ Todas las acciones que JARVIS ha ejecutado.
 """
             _write(errors_path, content)
 
-        return f"✅ Vault de JARVIS listo en: {VAULT_PATH}"
+        return f"✅ Vault de AARIS listo en: {VAULT_PATH}"
 
     except Exception as e:
         return f"Error en setup_vault: {e}"
@@ -436,7 +436,7 @@ def log_turn(user_input: str, assistant_response: str) -> None:
 
 **🧑 Tú:** {user_input.strip()}
 
-**🤖 JARVIS:** {assistant_response.strip()[:2000]}{"..." if len(assistant_response) > 2000 else ""}
+**🤖 AARIS:** {assistant_response.strip()[:2000]}{"..." if len(assistant_response) > 2000 else ""}
 
 ---
 
@@ -619,7 +619,7 @@ def update_user_profile(key: str, value: str) -> str:
             # Añadir en la sección de notas adicionales
             if "## Notas adicionales" in content:
                 content = content.replace(
-                    "## Notas adicionales\n*(JARVIS añadirá observaciones aquí)*",
+                    "## Notas adicionales\n*(AARIS añadirá observaciones aquí)*",
                     f"## Notas adicionales{addition}",
                 )
             else:
@@ -653,7 +653,7 @@ def get_user_profile() -> str:
 
 def get_settings() -> dict[str, Any]:
     """
-    Lee la configuración de JARVIS desde Config/settings.md.
+    Lee la configuración de AARIS desde Config/settings.md.
     Devuelve un dict con los valores encontrados.
     """
     try:
@@ -864,7 +864,7 @@ def search_knowledge(query: str, max_results: int = 5) -> str:
 
 def log_action(tool: str, args_summary: str, result_summary: str) -> None:
     """
-    Registra una acción ejecutada por JARVIS en Logs/actions.md.
+    Registra una acción ejecutada por AARIS en Logs/actions.md.
     """
     try:
         actions_path = _folder("logs") / "actions.md"
@@ -907,7 +907,7 @@ def log_tool_usage(tool_name: str, success: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CONTEXTO — lo que JARVIS inyecta antes de responder
+# CONTEXTO — lo que AARIS inyecta antes de responder
 # ---------------------------------------------------------------------------
 
 def _is_memory_query(text: str) -> bool:
@@ -992,7 +992,7 @@ def build_context_for_response(user_input: str) -> str:
     if not parts:
         return ""
 
-    header = "═" * 40 + "\n📚 CONTEXTO DEL VAULT DE JARVIS\n" + "═" * 40
+    header = "═" * 40 + "\n📚 CONTEXTO DEL VAULT DE AARIS\n" + "═" * 40
     footer = "═" * 40
     return header + "\n\n" + "\n\n".join(parts) + "\n\n" + footer
 
@@ -1004,9 +1004,9 @@ def build_context_for_response(user_input: str) -> str:
 def extract_and_remember(user_input: str, assistant_response: str) -> None:
     """
     Analiza la conversación y guarda automáticamente hechos importantes.
-    Llamado después de cada respuesta de JARVIS.
+    Llamado después de cada respuesta de AARIS.
 
-    Detecta: preferencias, nombre/ubicación, y acciones confirmadas por JARVIS.
+    Detecta: preferencias, nombre/ubicación, y acciones confirmadas por AARIS.
     """
     try:
         # ── Preferencias del usuario ────────────────────────────────────
@@ -1045,8 +1045,8 @@ def extract_and_remember(user_input: str, assistant_response: str) -> None:
             if len(location) < 50:
                 update_user_profile("Ubicación", location)
 
-        # ── Acciones confirmadas en la respuesta de JARVIS ──────────────
-        # Si JARVIS confirma una acción, la memoriza para sesiones futuras.
+        # ── Acciones confirmadas en la respuesta de AARIS ──────────────
+        # Si AARIS confirma una acción, la memoriza para sesiones futuras.
         resp_lower = assistant_response.lower()
         action_confirmations = [
             # Patrón de confirmación, categoría
@@ -1075,12 +1075,12 @@ def extract_and_remember(user_input: str, assistant_response: str) -> None:
 # API pública — punto de entrada único para _legacy_main.py
 # ---------------------------------------------------------------------------
 
-class JarvisBrain:
+class AarisBrain:
     """
-    Interfaz principal del cerebro de JARVIS.
+    Interfaz principal del cerebro de AARIS.
     Úsala así en _legacy_main.py:
 
-        brain = JarvisBrain()
+        brain = AarisBrain()
         brain.initialize()
 
         # Antes de cada turno:
@@ -1097,7 +1097,7 @@ class JarvisBrain:
             VAULT_PATH = Path(vault_path).expanduser().resolve()
 
     def initialize(self) -> str:
-        """Configura el vault y arranca la sesión. Llámalo al iniciar JARVIS."""
+        """Configura el vault y arranca la sesión. Llámalo al iniciar AARIS."""
         result = setup_vault()
         session_id = start_session()
         print(f"[Brain] {result}")
@@ -1179,11 +1179,11 @@ class JarvisBrain:
                     )
 
     def shutdown(self, summary: str = "") -> None:
-        """Cierra la sesión correctamente al salir de JARVIS."""
+        """Cierra la sesión correctamente al salir de AARIS."""
         end_session(summary)
         print("[Brain] Sesión guardada en el vault de Obsidian.")
 
-    # Métodos de acceso directo (para usar desde JARVIS como tools)
+    # Métodos de acceso directo (para usar desde AARIS como tools)
     def remember(self, fact: str, importance: str = "medium") -> str:
         return remember(fact, importance)
 

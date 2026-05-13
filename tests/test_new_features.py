@@ -1,5 +1,5 @@
 """
-Tests para los 6 nuevos módulos de JARVIS:
+Tests para los 6 nuevos módulos de AARIS:
 hotkey, clipboard_intel, briefing, network, media, organizer.
 """
 

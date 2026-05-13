@@ -11,10 +11,10 @@ def configure_logging(level: Optional[str] = None) -> None:
     """
     Logging unificado:
     - Consola bonita con Rich (si está disponible)
-    - JSONL opcional para auditoría/telemetría (si `JARVIS_JSONL_LOG_PATH` está seteado)
+    - JSONL opcional para auditoría/telemetría (si `AARIS_JSONL_LOG_PATH` está seteado)
     """
     if level is None:
-        level = os.environ.get("JARVIS_LOG_LEVEL", "INFO")
+        level = os.environ.get("AARIS_LOG_LEVEL", "INFO")
 
     lvl = getattr(logging, level.upper(), logging.INFO)
     root = logging.getLogger()
@@ -34,7 +34,7 @@ def configure_logging(level: Optional[str] = None) -> None:
         fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
     # Optional JSONL audit log
-    jsonl_path = os.environ.get("JARVIS_JSONL_LOG_PATH", "").strip()
+    jsonl_path = os.environ.get("AARIS_JSONL_LOG_PATH", "").strip()
     if jsonl_path:
         handlers.append(_JsonlHandler(jsonl_path))
 

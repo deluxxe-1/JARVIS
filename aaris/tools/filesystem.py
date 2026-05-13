@@ -16,7 +16,7 @@ import hashlib
 import time
 from contextlib import contextmanager
 
-from jarvis.tools.core import *
+from aaris.tools.core import *
 
 def create_file(path: str, content: str = "") -> str:
     """
@@ -28,7 +28,7 @@ def create_file(path: str, content: str = "") -> str:
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. create_file deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. create_file deshabilitado."
         resolved = resolve_path(path, must_exist=False)
         if resolved.startswith("Error:"):
             return resolved
@@ -76,6 +76,7 @@ def read_file(path: str, max_chars: int = 80000) -> str:
     except Exception as e:
         return f"Error al leer: {e}"
 
+@lru_cache(maxsize=512)
 def _read_file_cached(abs_path: str, max_chars: int) -> str:
     with open(abs_path, encoding="utf-8", errors="replace") as f:
         data = f.read(max_chars + 1)
@@ -92,7 +93,7 @@ def edit_file(path: str, new_content: str) -> str:
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. edit_file deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. edit_file deshabilitado."
         resolved = resolve_path(path, must_exist=True)
         if resolved.startswith("Error:"):
             return resolved
@@ -143,7 +144,7 @@ def search_replace_in_file(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. search_replace_in_file deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. search_replace_in_file deshabilitado."
         resolved = resolve_path(path, must_exist=True)
         if resolved.startswith("Error:"):
             return resolved
@@ -197,7 +198,7 @@ def create_folder(path: str) -> str:
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. create_folder deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. create_folder deshabilitado."
         resolved = resolve_path(path, must_exist=False)
         if resolved.startswith("Error:"):
             return resolved
@@ -440,6 +441,7 @@ def exists_path(path: str, cwd: Optional[str] = None) -> str:
     except Exception as e:
         return f"Error en exists_path: {e}"
 
+@lru_cache(maxsize=4096)
 def _exists_path_cached(resolved_abs_path: str) -> bool:
     return Path(resolved_abs_path).exists()
 
@@ -675,7 +677,7 @@ def append_file(path: str, content: str) -> str:
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. append_file deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. append_file deshabilitado."
         resolved = resolve_path(path, must_exist=False)
         if resolved.startswith("Error:"):
             return resolved
@@ -708,7 +710,7 @@ def insert_after(path: str, anchor_text: str, insert_text: str, occurrence_index
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. insert_after deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. insert_after deshabilitado."
         resolved = resolve_path(path, must_exist=True)
         if resolved.startswith("Error:"):
             return resolved
@@ -754,7 +756,7 @@ def copy_path(from_path: str, to_path: str, overwrite: bool = False, allow_dange
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. copy_path deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. copy_path deshabilitado."
         src = Path(resolve_path(from_path, must_exist=True))
         dst = Path(resolve_path(to_path, must_exist=False))
         if src.is_symlink():
@@ -786,7 +788,7 @@ def move_path(from_path: str, to_path: str, overwrite: bool = False, allow_dange
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. move_path deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. move_path deshabilitado."
         src = Path(resolve_path(from_path, must_exist=True))
         dst = Path(resolve_path(to_path, must_exist=False))
         if src.is_symlink():
@@ -817,7 +819,7 @@ def move_path(from_path: str, to_path: str, overwrite: bool = False, allow_dange
         return f"Error en move_path: {e}"
 
 def _trash_enabled() -> bool:
-    val = os.environ.get("JARVIS_USE_TRASH", "true").strip().lower()
+    val = os.environ.get("AARIS_USE_TRASH", "true").strip().lower()
     return val not in ("0", "false", "no", "off")
 
 def _trash_move(target: Path) -> str:
@@ -865,7 +867,7 @@ def delete_path(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. delete_path deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. delete_path deshabilitado."
         resolved = resolve_path(path, must_exist=True)
         if resolved.startswith("Error:"):
             return resolved
@@ -882,8 +884,8 @@ def delete_path(
         if str(target) == "/":
             return "Error: no se permite borrar `/`."
 
-        min_bytes_for_confirm = int(os.environ.get("JARVIS_DELETE_CONFIRM_MIN_BYTES", "50000000"))
-        min_entries_for_confirm = int(os.environ.get("JARVIS_DELETE_CONFIRM_MIN_ENTRIES", "200"))
+        min_bytes_for_confirm = int(os.environ.get("AARIS_DELETE_CONFIRM_MIN_BYTES", "50000000"))
+        min_entries_for_confirm = int(os.environ.get("AARIS_DELETE_CONFIRM_MIN_ENTRIES", "200"))
         sensitive_dir_names = {".ssh", ".gnupg", ".kube", ".kubernetes"}
         sensitive_file_names = {".bashrc", ".zshrc", ".profile", ".bash_profile", ".gitconfig", ".config"}
 
@@ -910,7 +912,7 @@ def delete_path(
 
             # Selección segura para directorios grandes (si no se especifica filtro).
             effective_threshold = max_entries if max_entries is not None else int(
-                os.environ.get("JARVIS_DELETE_LARGE_DIR_MAX_ENTRIES", "2000")
+                os.environ.get("AARIS_DELETE_LARGE_DIR_MAX_ENTRIES", "2000")
             )
             if glob_filter is None and effective_threshold > 0:
                 immediate = 0
@@ -1033,7 +1035,7 @@ def apply_unified_patch(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. apply_unified_patch deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. apply_unified_patch deshabilitado."
         if _policy_require_confirm("apply_unified_patch") and not confirm and not allow_dangerous:
             return "Error: política requiere confirm=true para apply_unified_patch."
         if not confirm and not allow_dangerous:
@@ -1063,7 +1065,7 @@ def apply_unified_patch(
             resolved_workdir = str(target_file.parent.resolve())
 
         with _path_lock(str(target_file.resolve())):
-            patch_tmp = Path(resolved_workdir) / f".jarvis_patch_{uuid.uuid4().hex}.diff"
+            patch_tmp = Path(resolved_workdir) / f".aaris_patch_{uuid.uuid4().hex}.diff"
             patch_tmp.write_text(patch_text or "", encoding="utf-8")
             proc = subprocess.run(
                 ["patch", f"-p{int(strip)}", "--batch", "-i", str(patch_tmp)],

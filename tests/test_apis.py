@@ -1,5 +1,5 @@
 """
-Tests para JARVIS APIs Module.
+Tests para AARIS APIs Module.
 Se mockean las llamadas HTTP para no depender de red.
 """
 
@@ -116,7 +116,7 @@ class TestGetNews:
     def test_get_news_invalid_category(self):
         result = get_news("nonexistent_category")
         assert "Error" in result
-        assert "Disponibles" in result
+        assert "no existe" in result or "RSS" in result
 
     def test_get_news_error(self):
         with _mock_http_get(500, ""):
@@ -126,33 +126,27 @@ class TestGetNews:
 
 class TestWebSearch:
     def test_success(self):
-        mock_data = {
-            "AbstractText": "Python is a programming language.",
-            "AbstractURL": "https://en.wikipedia.org/wiki/Python",
-            "AbstractSource": "Wikipedia",
-            "Answer": "",
-            "RelatedTopics": [
-                {"Text": "Python tutorial", "FirstURL": "https://example.com/python"},
-            ],
-        }
-        with _mock_http_get(200, json.dumps(mock_data)):
+        fake = [
+            {
+                "title": "Python",
+                "url": "https://en.wikipedia.org/wiki/Python",
+                "snippet": "Python is a programming language.",
+            },
+        ]
+        with patch("apis._ddgs_text_results", return_value=fake):
             result = web_search("Python programming")
             data = json.loads(result)
             assert data["count"] >= 1
-            assert any("Python" in r["text"] for r in data["results"])
+            assert any("Python" in r["snippet"] for r in data["results"])
 
     def test_empty_query(self):
         result = web_search("")
         assert "Error" in result
 
     def test_no_results(self):
-        mock_data = {
-            "AbstractText": "",
-            "Answer": "",
-            "RelatedTopics": [],
-            "Definition": "",
-        }
-        with _mock_http_get(200, json.dumps(mock_data)):
+        with patch("apis._ddgs_text_results", return_value=[]), patch(
+            "apis._wikipedia_fallback_rows", return_value=[],
+        ):
             result = web_search("xyznonexistent12345")
             assert "Sin resultados" in result
 
@@ -230,6 +224,7 @@ class TestGetIpInfo:
             data = json.loads(result)
             assert data["ip"] == "8.8.8.8"
             assert data["city"] == "Mountain View"
+            assert data.get("source") == "ipinfo.io"
 
     def test_specific_ip(self):
         mock_data = {"ip": "1.1.1.1", "city": "Sydney", "country": "AU"}
@@ -237,6 +232,7 @@ class TestGetIpInfo:
             result = get_ip_info("1.1.1.1")
             data = json.loads(result)
             assert data["ip"] == "1.1.1.1"
+            assert data.get("source") == "ipinfo.io"
 
 
 class TestGetCryptoPrice:
@@ -289,3 +285,81 @@ class TestGetDatetimeInfo:
         result = get_datetime_info("york")
         data = json.loads(result)
         assert "time" in data
+
+
+class TestOpenWeatherWhenKeySet:
+    def test_json_from_openweather(self):
+        mock_body = json.dumps({
+            "cod": 200,
+            "name": "Barcelona",
+            "sys": {"country": "ES"},
+            "main": {"temp": 18.5, "feels_like": 17.0, "humidity": 55, "pressure": 1012},
+            "weather": [{"description": "cielo claro", "main": "Clear"}],
+            "wind": {"speed": 3.2, "deg": 180},
+            "clouds": {"all": 0},
+        })
+        with patch.dict(os.environ, {"AARIS_OPENWEATHER_API_KEY": "testkey"}, clear=False):
+            with _mock_http_get(200, mock_body):
+                result = get_weather("Barcelona", format="json")
+        data = json.loads(result)
+        assert data["source"] == "openweathermap.org"
+        assert data["location"] == "Barcelona"
+        assert data["temperature"] == 18.5
+
+
+class TestNewsAPIWhenKeySet:
+    def test_top_headlines(self):
+        mock = {
+            "status": "ok",
+            "articles": [{
+                "title": "Titular prueba",
+                "url": "https://example.com/n",
+                "description": "Resumen",
+                "publishedAt": "2026-01-01T12:00:00Z",
+                "source": {"name": "Medio"},
+            }],
+        }
+        with patch.dict(os.environ, {"AARIS_NEWSAPI_KEY": "newskey"}, clear=False):
+            with _mock_http_get(200, json.dumps(mock)):
+                result = get_news(category="headlines_es", max_items=3)
+        data = json.loads(result)
+        assert data["count"] == 1
+        assert data["news"][0]["title"] == "Titular prueba"
+        assert data["articles"][0]["source"] == "Medio"
+
+    def test_everything_search_kwarg(self):
+        mock = {"status": "ok", "articles": [{"title": "T2", "url": "http://u", "description": "", "source": {}}]}
+        with patch.dict(os.environ, {"AARIS_NEWSAPI_KEY": "k"}, clear=False):
+            with _mock_http_get(200, json.dumps(mock)):
+                result = get_news("general_es", max_items=2, search="inteligencia artificial")
+        data = json.loads(result)
+        assert "everything" in data.get("category", "")
+
+    def test_everything_api_error_includes_hint(self):
+        mock = {"status": "error", "message": "Developer accounts only"}
+        with patch.dict(os.environ, {"AARIS_NEWSAPI_KEY": "k"}, clear=False):
+            with _mock_http_get(200, json.dumps(mock)):
+                result = get_news("general_es", search="bitcoin", max_items=2)
+        assert "Error" in result
+        assert "headlines_es" in result or "headlines" in result
+
+
+class TestIpinfoLiteWhenTokenSet:
+    def test_lite_for_ip(self):
+        mock = {
+            "ip": "8.8.8.8",
+            "asn": "AS15169",
+            "as_name": "Google LLC",
+            "as_domain": "google.com",
+            "country_code": "US",
+            "country": "United States",
+            "continent_code": "NA",
+            "continent": "North America",
+        }
+        with patch.dict(os.environ, {"AARIS_IPINFO_TOKEN": "tok"}, clear=False):
+            with _mock_http_get(200, json.dumps(mock)):
+                result = get_ip_info("8.8.8.8")
+        data = json.loads(result)
+        assert data["source"] == "ipinfo.io/lite"
+        assert data["as_name"] == "Google LLC"
+        assert data["country_code"] == "US"

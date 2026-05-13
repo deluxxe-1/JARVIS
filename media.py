@@ -1,5 +1,5 @@
 """
-JARVIS Media Controller Module — Control de reproducción multimedia.
+AARIS Media Controller Module — Control de reproducción multimedia.
 
 Controla la reproducción de música/vídeo del sistema usando teclas multimedia
 virtuales (funciona con Spotify, YouTube, VLC, Windows Media Player, etc.).

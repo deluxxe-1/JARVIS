@@ -1,13 +1,13 @@
 """
-JARVIS APIs Module — Integraciones con APIs externas gratuitas (sin API keys).
+AARIS APIs Module — Integraciones con APIs externas.
 
 Provee herramientas para consultar información del mundo exterior:
-- Clima (wttr.in)
-- Noticias (RSS feeds)
+- Clima: wttr.in (sin key) u **OpenWeatherMap** si defines `AARIS_OPENWEATHER_API_KEY`
+- Noticias: RSS (sin key) o **NewsAPI.org** si defines `AARIS_NEWSAPI_KEY` (`search=` o categorías `headlines_xx`)
 - Búsqueda web (DuckDuckGo)
 - Wikipedia
 - Traducción (MyMemory)
-- IP/Ubicación (ipinfo.io)
+- IP/Ubicación: ipinfo.io JSON sin token, o **IPinfo Lite** con `AARIS_IPINFO_TOKEN`
 - Criptomonedas (CoinGecko)
 - Fecha/hora mundial
 """
@@ -19,6 +19,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Any
 from urllib.parse import quote_plus
 
+# duckduckgo-search avisa renombre a `ddgs` (RuntimeWarning); se suprime dentro de _ddgs_text_results.
+
 
 def _http_get(url: str, timeout: int = 10, headers: Optional[dict] = None) -> tuple[int, str]:
     """
@@ -28,7 +30,7 @@ def _http_get(url: str, timeout: int = 10, headers: Optional[dict] = None) -> tu
     try:
         import requests
         h = headers or {}
-        h.setdefault("User-Agent", "JARVIS-Assistant/1.0")
+        h.setdefault("User-Agent", "AARIS-Assistant/1.0")
         resp = requests.get(url, timeout=timeout, headers=h)
         return resp.status_code, resp.text
     except ImportError:
@@ -36,7 +38,7 @@ def _http_get(url: str, timeout: int = 10, headers: Optional[dict] = None) -> tu
         import urllib.request
         import urllib.error
         req = urllib.request.Request(url)
-        req.add_header("User-Agent", "JARVIS-Assistant/1.0")
+        req.add_header("User-Agent", "AARIS-Assistant/1.0")
         if headers:
             for k, v in headers.items():
                 req.add_header(k, v)
@@ -49,21 +51,130 @@ def _http_get(url: str, timeout: int = 10, headers: Optional[dict] = None) -> tu
         return 0, f"Error HTTP: {e}"
 
 
+def _openweather_key() -> str:
+    return (
+        os.environ.get("AARIS_OPENWEATHER_API_KEY", "")
+        or os.environ.get("OPENWEATHER_API_KEY", "")
+    ).strip()
+
+
+def _newsapi_key() -> str:
+    return (
+        os.environ.get("AARIS_NEWSAPI_KEY", "")
+        or os.environ.get("NEWSAPI_KEY", "")
+    ).strip()
+
+
+def _ipinfo_token() -> str:
+    return (
+        os.environ.get("AARIS_IPINFO_TOKEN", "")
+        or os.environ.get("IPINFO_TOKEN", "")
+    ).strip()
+
+
+def _get_weather_openweather(location: str, format: str, lang: str) -> Optional[str]:
+    """OpenWeatherMap 2.5 current weather. None = usar wttr.in."""
+    key = _openweather_key()
+    if not key:
+        return None
+    loc = (location or "").strip() or os.environ.get("AARIS_CITY", "Madrid").strip() or "Madrid"
+    url = (
+        "https://api.openweathermap.org/data/2.5/weather?"
+        f"q={quote_plus(loc)}&appid={quote_plus(key)}&units=metric&lang={lang}"
+    )
+    status, body = _http_get(url, timeout=12)
+    if status == 401:
+        return "Error: OpenWeatherMap rechazó la API key (401). Comprueba AARIS_OPENWEATHER_API_KEY."
+    if status != 200:
+        return None
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    cod = data.get("cod")
+    if str(cod) != "200":
+        return None
+    main = data.get("main") or {}
+    wlist = data.get("weather") or [{}]
+    w0 = wlist[0] if wlist else {}
+    wind = data.get("wind") or {}
+    name = data.get("name") or loc
+    country = (data.get("sys") or {}).get("country") or ""
+    temp = main.get("temp")
+    feels = main.get("feels_like")
+    hum = main.get("humidity")
+    desc = w0.get("description") or w0.get("main") or ""
+    spd = wind.get("speed")
+    deg = wind.get("deg")
+
+    if format == "json":
+        out = {
+            "source": "openweathermap.org",
+            "location": name,
+            "country": country,
+            "temperature_c": temp,
+            "temperature": temp,
+            "feels_like_c": feels,
+            "humidity": hum,
+            "description": desc,
+            "pressure_mb": main.get("pressure"),
+            "wind_m_s": spd,
+            "wind_deg": deg,
+            "visibility_m": data.get("visibility"),
+            "clouds_percent": (data.get("clouds") or {}).get("all")
+            if isinstance(data.get("clouds"), dict)
+            else data.get("clouds"),
+        }
+        return json.dumps(out, ensure_ascii=False)
+
+    if format == "short":
+        line = f"{name}: {desc}"
+        if temp is not None:
+            line += f" {temp:.0f}°C"
+        if hum is not None:
+            line += f" hum {hum}%"
+        if spd is not None:
+            line += f" viento {spd:.1f}m/s"
+        return line.strip()
+
+    lines = [
+        f"Clima (OpenWeatherMap) — {name}, {country}".strip(" ,"),
+        f"Condición: {desc}",
+    ]
+    if temp is not None:
+        lines.append(f"Temperatura: {temp:.1f}°C (sensación {feels:.1f}°C)" if feels is not None else f"Temperatura: {temp:.1f}°C")
+    if hum is not None:
+        lines.append(f"Humedad: {hum}%")
+    if main.get("pressure"):
+        lines.append(f"Presión: {main['pressure']} hPa")
+    if spd is not None:
+        wdir = f", dirección {deg}°" if deg is not None else ""
+        lines.append(f"Viento: {spd:.1f} m/s{wdir}")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
-# Clima — wttr.in (gratis, sin key)
+# Clima — wttr.in (gratis, sin key) u OpenWeatherMap con AARIS_OPENWEATHER_API_KEY
 # ---------------------------------------------------------------------------
 
 def get_weather(location: str = "", format: str = "full", lang: str = "es") -> str:
     """
-    Consulta el clima actual y pronóstico para una ubicación.
+    Consulta el clima actual para una ubicación.
+
+    Si existe ``AARIS_OPENWEATHER_API_KEY`` (o ``OPENWEATHER_API_KEY``), se usa
+    OpenWeatherMap. Con ``location`` vacío se usa ``AARIS_CITY`` (por defecto Madrid).
+    Si no hay clave, se usa wttr.in (ubicación vacía = detección aproximada por IP).
 
     Args:
         location: Ciudad o ubicación (ej: "Madrid", "New York", "Tokyo").
-                  Si vacío, usa la ubicación detectada por IP.
         format: "full" (detallado), "short" (una línea), "json" (datos crudos).
         lang: Código de idioma para la respuesta (ej: "es", "en", "fr").
     """
     try:
+        ow = _get_weather_openweather(location, format, lang)
+        if ow is not None:
+            return ow
+
         loc = quote_plus(location.strip()) if location.strip() else ""
 
         if format == "short":
@@ -166,30 +277,153 @@ _RSS_FEEDS = {
     "hackernews": "https://hnrss.org/frontpage",
 }
 
+_NEWSAPI_HEADLINE_COUNTRIES: dict[str, str] = {
+    "headlines_es": "es",
+    "headlines_mx": "mx",
+    "headlines_ar": "ar",
+    "headlines_co": "co",
+    "headlines_us": "us",
+    "headlines_gb": "gb",
+    "headlines_fr": "fr",
+    "headlines_de": "de",
+    "headlines_it": "it",
+    "headlines_br": "br",
+    "headlines_pt": "pt",
+}
+
+
+def _newsapi_article_to_item(a: dict) -> dict[str, str]:
+    src = a.get("source") or {}
+    src_name = src.get("name", "") if isinstance(src, dict) else str(src or "")
+    return {
+        "title": (a.get("title") or "").strip(),
+        "link": (a.get("url") or "").strip(),
+        "description": ((a.get("description") or "")[:300]),
+        "published": (a.get("publishedAt") or "").strip(),
+        "source": src_name,
+    }
+
+
+_NEWSAPI_EVERYTHING_HINT = (
+    " Sugerencia: en plan gratuito `/v2/everything` a menudo está limitado; prueba "
+    "`get_news(category='headlines_es')` o `headlines_us` (titulares por país)."
+)
+
+
+def _newsapi_everything(query: str, max_items: int, lang: str) -> str:
+    key = _newsapi_key()
+    lang_news = "es" if lang.startswith("es") else "en"
+    n = min(max(1, max_items), 100)
+    url = (
+        "https://newsapi.org/v2/everything?"
+        f"q={quote_plus(query)}&language={lang_news}&sortBy=publishedAt&pageSize={n}&apiKey={quote_plus(key)}"
+    )
+    status, body = _http_get(url, timeout=15)
+    if status == 401:
+        return "Error: NewsAPI rechazó la API key (401). Revisa AARIS_NEWSAPI_KEY."
+    if status != 200:
+        return f"Error: NewsAPI everything (status={status})." + _NEWSAPI_EVERYTHING_HINT
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return "Error: respuesta NewsAPI no es JSON." + _NEWSAPI_EVERYTHING_HINT
+    if data.get("status") != "ok":
+        return f"Error NewsAPI: {data.get('message', body[:200])}" + _NEWSAPI_EVERYTHING_HINT
+    raw = data.get("articles") or []
+    items = [_newsapi_article_to_item(a) for a in raw if (a.get("title") or "").strip()]
+    if not items:
+        return "Sin artículos para esa búsqueda." + _NEWSAPI_EVERYTHING_HINT
+    out = {
+        "source": "newsapi.org",
+        "category": f"everything:{query}",
+        "count": len(items),
+        "news": items,
+        "articles": items,
+    }
+    return json.dumps(out, ensure_ascii=False)
+
+
+def _newsapi_top_headlines(country: str, max_items: int, category: str) -> str:
+    key = _newsapi_key()
+    n = min(max(1, max_items), 100)
+    url = (
+        "https://newsapi.org/v2/top-headlines?"
+        f"country={quote_plus(country)}&pageSize={n}&apiKey={quote_plus(key)}"
+    )
+    status, body = _http_get(url, timeout=15)
+    if status == 401:
+        return "Error: NewsAPI rechazó la API key (401). Revisa AARIS_NEWSAPI_KEY."
+    if status != 200:
+        return f"Error: NewsAPI top-headlines (status={status})."
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return "Error: respuesta NewsAPI no es JSON."
+    if data.get("status") != "ok":
+        return f"Error NewsAPI: {data.get('message', body[:200])}"
+    raw = data.get("articles") or []
+    items = [_newsapi_article_to_item(a) for a in raw if (a.get("title") or "").strip()]
+    if not items:
+        return "Sin titulares disponibles para ese país."
+    out = {
+        "source": "newsapi.org",
+        "category": category,
+        "count": len(items),
+        "news": items,
+        "articles": items,
+    }
+    return json.dumps(out, ensure_ascii=False)
+
 
 def get_news(
     category: str = "general_es",
     max_items: int = 8,
     custom_feed_url: Optional[str] = None,
+    *,
+    search: str = "",
+    country_code: str = "",
+    lang: str = "es",
 ) -> str:
     """
-    Obtiene noticias de feeds RSS.
+    Noticias: RSS (sin clave) o NewsAPI.org si defines ``AARIS_NEWSAPI_KEY``.
 
     Args:
-        category: Categoría/feed predefinido. Opciones:
-                  "general_es" (El País), "tech_es" (El País Tech),
-                  "bbc_world", "bbc_tech", "reuters", "hackernews".
-        max_items: Número máximo de noticias a devolver.
-        custom_feed_url: URL RSS personalizada (ignora category).
+        category: Feed RSS (general_es, tech_es, …) o titulares ``headlines_es``,
+                  ``headlines_us``, etc. (requiere NewsAPI).
+        max_items: Máximo de noticias.
+        custom_feed_url: URL RSS (ignora category).
+        search: Con NewsAPI, búsqueda ``/v2/everything`` (temas, nombres, empresas).
+        country_code: ISO2 (ej. ``es``) para titulares vía NewsAPI.
+        lang: Afecta el parámetro ``language`` de ``everything`` (es/en).
     """
     try:
+        cat_l = category.strip().lower()
+        sch = search.strip()
+        cc = country_code.strip().lower()
+        key = _newsapi_key()
+
+        if key and sch:
+            return _newsapi_everything(sch, max_items, lang)
+
+        if key and len(cc) == 2:
+            return _newsapi_top_headlines(cc, max_items, category=f"headlines:{cc}")
+
+        if key and cat_l in _NEWSAPI_HEADLINE_COUNTRIES:
+            return _newsapi_top_headlines(_NEWSAPI_HEADLINE_COUNTRIES[cat_l], max_items, category=cat_l)
+
         if custom_feed_url:
             url = custom_feed_url
         else:
-            url = _RSS_FEEDS.get(category.strip().lower())
+            url = _RSS_FEEDS.get(cat_l)
             if not url:
-                available = ", ".join(sorted(_RSS_FEEDS.keys()))
-                return f"Error: categoría '{category}' no existe. Disponibles: {available}"
+                rss_keys = ", ".join(sorted(_RSS_FEEDS.keys()))
+                hl_keys = ", ".join(sorted(_NEWSAPI_HEADLINE_COUNTRIES.keys()))
+                extra = (
+                    f" Con AARIS_NEWSAPI_KEY: categorías {hl_keys} o search=\"tema\"."
+                    if not key
+                    else f" Con NewsAPI: {hl_keys} o search=\"…\"."
+                )
+                return f"Error: categoría '{category}' no existe. RSS: {rss_keys}.{extra}"
 
         status, body = _http_get(url, timeout=15)
         if status != 200:
@@ -203,6 +437,7 @@ def get_news(
             "source": category if not custom_feed_url else custom_feed_url,
             "count": len(items),
             "news": items,
+            "articles": items,
         }
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
@@ -213,9 +448,111 @@ def get_news(
 # Búsqueda web — DuckDuckGo HTML (gratis, sin key)
 # ---------------------------------------------------------------------------
 
+def _ddgs_text_results(query: str, max_results: int = 8) -> list[dict[str, str]]:
+    """
+    Obtiene filas {title, url, snippet} desde DDGS con reintentos (región, backend, variantes).
+    Sin región, consultas cortas en español a menudo devuelven 0 resultados (p. ej. «CEAC FP»).
+    """
+    q0 = (query or "").strip()
+    if not q0:
+        return []
+
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        try:
+            from duckduckgo_search import DDGS
+        except ImportError:
+            return []
+
+    region_pref = (os.environ.get("AARIS_DDG_REGION", "es-es") or "").strip() or "es-es"
+    regions_try: list[Optional[str]] = [region_pref, "es-es", "wt-es", None]
+    regions_ordered: list[Optional[str]] = []
+    for r in regions_try:
+        if r not in regions_ordered:
+            regions_ordered.append(r)
+
+    backends_try = ["auto", "duckduckgo", "bing"]
+    env_backends = os.environ.get("AARIS_DDG_BACKENDS", "").strip()
+    if env_backends:
+        backends_try = [b.strip() for b in env_backends.split(",") if b.strip()] + [
+            b for b in backends_try if b not in env_backends
+        ]
+
+    variants = [q0]
+    if len(q0) < 48:
+        variants.extend(
+            [
+                f"{q0} España",
+                f"{q0} formación profesional",
+                f"{q0} FP España",
+            ]
+        )
+
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    ddgs = DDGS()
+
+    for kw in variants:
+        for region in regions_ordered:
+            for backend in backends_try:
+                try:
+                    raw = ddgs.text(
+                        kw,
+                        region=region,
+                        backend=backend,
+                        max_results=max_results,
+                    )
+                except TypeError:
+                    try:
+                        raw = ddgs.text(kw, max_results=max_results)
+                    except Exception:
+                        continue
+                except Exception:
+                    continue
+                for item in raw or []:
+                    url = (item.get("href") or item.get("url") or "").strip()
+                    title = (item.get("title") or "").strip()
+                    snippet = (item.get("body") or item.get("snippet") or "").strip()
+                    key = url or f"{title}|{snippet[:80]}"
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append({"title": title, "url": url, "snippet": snippet})
+                    if len(out) >= max_results:
+                        return out
+        if len(out) >= min(3, max_results):
+            break
+    return out
+
+
+def _wikipedia_fallback_rows(query: str) -> list[dict[str, str]]:
+    """Si DDGS falla, al menos un resultado útil desde Wikipedia (es)."""
+    raw = wikipedia_search(query, lang="es", sentences=8)
+    if not raw or raw.startswith("Error:") or raw.startswith("Sin "):
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    title = (data.get("title") or "").strip()
+    url = (data.get("url") or "").strip()
+    extract = (data.get("extract") or "").strip()
+    if not title and not extract:
+        return []
+    snippet = extract[:900] + ("…" if len(extract) > 900 else "")
+    return [
+        {
+            "title": f"[Wikipedia] {title}" if title else "[Wikipedia]",
+            "url": url or f"https://es.wikipedia.org/wiki/{quote_plus(title.replace(' ', '_'))}",
+            "snippet": snippet,
+        }
+    ]
+
+
 def web_search(query: str, max_results: int = 8) -> str:
     """
-    Busca en la web usando DuckDuckGo y devuelve resultados.
+    Busca en la web usando DuckDuckGo (librería duckduckgo-search) y devuelve resultados.
 
     Args:
         query: Texto a buscar.
@@ -225,84 +562,23 @@ def web_search(query: str, max_results: int = 8) -> str:
         if not query or not query.strip():
             return "Error: query vacía."
 
-        # DuckDuckGo Instant Answer API
-        url = f"https://api.duckduckgo.com/?q={quote_plus(query)}&format=json&no_html=1&skip_disambig=1"
-        status, body = _http_get(url, timeout=15)
-
-        if status != 200:
-            return f"Error: búsqueda falló (status={status})."
-
-        data = json.loads(body)
-        results: list[dict[str, str]] = []
-
-        # Abstract (respuesta directa)
-        abstract = data.get("AbstractText", "").strip()
-        abstract_url = data.get("AbstractURL", "")
-        abstract_source = data.get("AbstractSource", "")
-        if abstract:
-            results.append({
-                "type": "answer",
-                "title": abstract_source or "Respuesta directa",
-                "text": abstract,
-                "url": abstract_url,
-            })
-
-        # Answer
-        answer = data.get("Answer", "").strip()
-        if answer:
-            results.append({
-                "type": "instant_answer",
-                "title": "Respuesta instantánea",
-                "text": answer,
-                "url": "",
-            })
-
-        # Related topics
-        for topic in data.get("RelatedTopics", [])[:max_results]:
-            if isinstance(topic, dict):
-                text = topic.get("Text", "").strip()
-                first_url = topic.get("FirstURL", "")
-                if text:
-                    results.append({
-                        "type": "related",
-                        "title": text[:120],
-                        "text": text,
-                        "url": first_url,
-                    })
-                # Sub-topics
-                for sub in topic.get("Topics", []):
-                    if isinstance(sub, dict):
-                        sub_text = sub.get("Text", "").strip()
-                        sub_url = sub.get("FirstURL", "")
-                        if sub_text:
-                            results.append({
-                                "type": "related",
-                                "title": sub_text[:120],
-                                "text": sub_text,
-                                "url": sub_url,
-                            })
-
-        results = results[:max_results]
-
+        results = _ddgs_text_results(query, max_results=max_results)
+        engine = "duckduckgo"
         if not results:
-            # Fallback: devolver el abstract si no hay resultados estructurados
-            definition = data.get("Definition", "").strip()
-            if definition:
-                results.append({
-                    "type": "definition",
-                    "title": "Definición",
-                    "text": definition,
-                    "url": data.get("DefinitionURL", ""),
-                })
+            results = _wikipedia_fallback_rows(query)
+            engine = "wikipedia_fallback"
 
         if not results:
             return f"Sin resultados relevantes para '{query}'. Intenta con otra búsqueda."
 
         return json.dumps({
             "query": query,
+            "engine": engine,
             "count": len(results),
             "results": results,
         }, ensure_ascii=False)
+    except ImportError:
+        return "Error: la librería 'duckduckgo-search' no está instalada. Instálala con: pip install -U duckduckgo-search"
     except Exception as e:
         return f"Error en web_search: {e}"
 
@@ -312,8 +588,8 @@ def web_search_full(query: str, max_results: int = 8) -> str:
     Busca en la web y devuelve resultados de búsqueda reales
     con título, URL y snippet descriptivo.
 
-    Usa Google Custom Search si JARVIS_GOOGLE_API_KEY y JARVIS_GOOGLE_CX están configurados,
-    si no, usa DuckDuckGo HTML scraping como fallback gratuito.
+    Usa Google Custom Search si AARIS_GOOGLE_API_KEY y AARIS_GOOGLE_CX están configurados,
+    si no, usa DuckDuckGo (librería duckduckgo-search) como fallback gratuito.
 
     Esta herramienta es superior a web_search para obtener información real de internet.
     Úsala cuando el usuario pregunte por información actualizada o pida investigar un tema.
@@ -327,8 +603,8 @@ def web_search_full(query: str, max_results: int = 8) -> str:
             return "Error: query vacía."
 
         # ── Google Custom Search (si hay API key) ──
-        google_api_key = os.environ.get("JARVIS_GOOGLE_API_KEY", "").strip()
-        google_cx = os.environ.get("JARVIS_GOOGLE_CX", "").strip()
+        google_api_key = os.environ.get("AARIS_GOOGLE_API_KEY", "").strip()
+        google_cx = os.environ.get("AARIS_GOOGLE_CX", "").strip()
 
         if google_api_key and google_cx:
             try:
@@ -359,93 +635,26 @@ def web_search_full(query: str, max_results: int = 8) -> str:
             except Exception:
                 pass  # Fallback a DuckDuckGo
 
-        # ── DuckDuckGo HTML scraping (fallback gratuito) ──
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                          "Chrome/120.0.0.0 Safari/537.36",
-        }
-
-        try:
-            import requests as req_lib
-            resp = req_lib.post(
-                "https://html.duckduckgo.com/html/",
-                data={"q": query, "b": ""},
-                headers=headers,
-                timeout=15,
-            )
-            html = resp.text
-        except ImportError:
-            import urllib.request
-            import urllib.parse
-            data = urllib.parse.urlencode({"q": query, "b": ""}).encode("utf-8")
-            req = urllib.request.Request(
-                "https://html.duckduckgo.com/html/",
-                data=data,
-                headers=headers,
-            )
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                html = resp.read().decode("utf-8", errors="replace")
-
-        results: list[dict[str, str]] = []
-
-        result_blocks = re.findall(
-            r'class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
-            r'class="result__snippet"[^>]*>(.*?)</(?:a|span)>',
-            html,
-            re.DOTALL,
-        )
-
-        for href, title_html, snippet_html in result_blocks[:max_results]:
-            title = re.sub(r"<[^>]+>", "", title_html).strip()
-            snippet = re.sub(r"<[^>]+>", "", snippet_html).strip()
-
-            actual_url = href
-            uddg_match = re.search(r"uddg=([^&]+)", href)
-            if uddg_match:
-                from urllib.parse import unquote
-                actual_url = unquote(uddg_match.group(1))
-
-            if title and actual_url:
-                results.append({
-                    "title": title,
-                    "url": actual_url,
-                    "snippet": snippet,
-                })
+        # ── DuckDuckGo / variantes (región es-es por defecto) + Wikipedia si sigue vacío ──
+        results = _ddgs_text_results(query, max_results=max_results)
+        engine = "duckduckgo"
+        if not results:
+            results = _wikipedia_fallback_rows(query)
+            engine = "wikipedia_fallback"
 
         if not results:
-            links = re.findall(
-                r'<a[^>]+class="[^"]*result[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
-                html,
-                re.DOTALL,
-            )
-            for href, title_html in links[:max_results]:
-                title = re.sub(r"<[^>]+>", "", title_html).strip()
-                actual_url = href
-                uddg_match = re.search(r"uddg=([^&]+)", href)
-                if uddg_match:
-                    from urllib.parse import unquote
-                    actual_url = unquote(uddg_match.group(1))
-                if title and "duckduckgo" not in actual_url.lower():
-                    results.append({
-                        "title": title,
-                        "url": actual_url,
-                        "snippet": "",
-                    })
-
-        if not results:
-            return web_search(query, max_results=max_results)
+            return f"Sin resultados relevantes para '{query}'. Intenta con otra búsqueda."
 
         return json.dumps({
             "query": query,
-            "engine": "duckduckgo",
+            "engine": engine,
             "count": len(results),
             "results": results,
         }, ensure_ascii=False)
+    except ImportError:
+        return "Error: la librería 'duckduckgo-search' no está instalada. Instálala con: pip install -U duckduckgo-search"
     except Exception as e:
-        try:
-            return web_search(query, max_results=max_results)
-        except Exception:
-            return f"Error en web_search_full: {e}"
+        return f"Error en web_search_full: {e}"
 
 
 def _clean_html_to_text(html: str) -> str:
@@ -775,25 +984,78 @@ def translate_text(
 
 
 # ---------------------------------------------------------------------------
-# IP / Ubicación — ipinfo.io (gratis, sin key, 50k req/mes)
+# IP / Ubicación — ipinfo.io (JSON) o IPinfo Lite con AARIS_IPINFO_TOKEN
 # ---------------------------------------------------------------------------
 
 def get_ip_info(ip: str = "") -> str:
     """
-    Obtiene información sobre la IP pública actual o una IP específica.
+    Información de una IP o de la IP pública actual.
 
-    Args:
-        ip: Dirección IP a consultar. Si vacío, usa la IP pública actual.
+    Con ``AARIS_IPINFO_TOKEN`` (o ``IPINFO_TOKEN``) se usa primero la API **Lite**
+    (ASN, país, continente, etc.). Si falla, se intenta el JSON clásico con el mismo token.
+    Sin token, ``https://ipinfo.io/json`` (límites más bajos).
     """
     try:
+        token = _ipinfo_token()
         target = ip.strip() if ip.strip() else ""
-        url = f"https://ipinfo.io/{target}/json" if target else "https://ipinfo.io/json"
+
+        if token:
+            lite_url = (
+                f"https://api.ipinfo.io/lite/{quote_plus(target)}?token={quote_plus(token)}"
+                if target
+                else f"https://api.ipinfo.io/lite?token={quote_plus(token)}"
+            )
+            status, body = _http_get(lite_url, timeout=10)
+            if status == 200 and body.strip().startswith("{"):
+                data = json.loads(body)
+                result = {
+                    "source": "ipinfo.io/lite",
+                    "ip": data.get("ip"),
+                    "asn": data.get("asn"),
+                    "as_name": data.get("as_name"),
+                    "as_domain": data.get("as_domain"),
+                    "country_code": data.get("country_code"),
+                    "country": data.get("country"),
+                    "continent_code": data.get("continent_code"),
+                    "continent": data.get("continent"),
+                    "city": data.get("city"),
+                    "region": data.get("region"),
+                    "location": data.get("loc"),
+                    "organization": data.get("org"),
+                    "timezone": data.get("timezone"),
+                    "postal": data.get("postal"),
+                }
+                return json.dumps(result, ensure_ascii=False)
+            if status in (401, 403):
+                return "Error: token IPinfo inválido o sin permiso (401/403). Revisa AARIS_IPINFO_TOKEN."
+
+            base = f"https://ipinfo.io/{quote_plus(target)}/json" if target else "https://ipinfo.io/json"
+            classic_url = f"{base}?token={quote_plus(token)}"
+            status, body = _http_get(classic_url, timeout=10)
+            if status == 200:
+                data = json.loads(body)
+                result = {
+                    "source": "ipinfo.io",
+                    "ip": data.get("ip"),
+                    "city": data.get("city"),
+                    "region": data.get("region"),
+                    "country": data.get("country"),
+                    "location": data.get("loc"),
+                    "organization": data.get("org"),
+                    "timezone": data.get("timezone"),
+                    "postal": data.get("postal"),
+                }
+                return json.dumps(result, ensure_ascii=False)
+            return f"Error: consulta IP falló (lite y json, status={status})."
+
+        url = f"https://ipinfo.io/{quote_plus(target)}/json" if target else "https://ipinfo.io/json"
         status, body = _http_get(url, timeout=10)
         if status != 200:
             return f"Error: consulta IP falló (status={status})."
 
         data = json.loads(body)
         result = {
+            "source": "ipinfo.io",
             "ip": data.get("ip"),
             "city": data.get("city"),
             "region": data.get("region"),
@@ -982,7 +1244,7 @@ def extract_info_from_url(url: str, query: str) -> str:
     
     prompt = f"Consulta a responder: {query}\\n\\n--- TEXTO DE LA WEB ---\\n{text_slice}\\n--- FIN DEL TEXTO ---"
     
-    model = os.environ.get("JARVIS_MODEL", "qwen2.5:14b")
+    model = os.environ.get("AARIS_MODEL", "qwen2.5:14b")
     
     try:
         response = chat(

@@ -36,28 +36,28 @@ def _is_relative_to(path: Path, base: Path) -> bool:
         return False
 
 def _read_only_mode() -> bool:
-    val = os.environ.get("JARVIS_READ_ONLY", "false").strip().lower()
+    val = os.environ.get("AARIS_READ_ONLY", "false").strip().lower()
     return val in ("1", "true", "yes", "si", "sí", "on")
 
 def _read_only_allow_undo() -> bool:
-    val = os.environ.get("JARVIS_READ_ONLY_ALLOW_UNDO", "true").strip().lower()
+    val = os.environ.get("AARIS_READ_ONLY_ALLOW_UNDO", "true").strip().lower()
     return val in ("1", "true", "yes", "si", "sí", "on")
 
 def _load_policy() -> dict[str, Any]:
     """
-    Carga políticas desde env `JARVIS_POLICY_JSON` (string JSON).
+    Carga políticas desde env `AARIS_POLICY_JSON` (string JSON).
     Ejemplo:
-      export JARVIS_POLICY_JSON='{"forbidden_path_prefixes":["/etc/"],"require_confirm_tools":["delete_path"]}'
+      export AARIS_POLICY_JSON='{"forbidden_path_prefixes":["/etc/"],"require_confirm_tools":["delete_path"]}'
     """
     global _POLICY_CACHE
     if _POLICY_CACHE is not None:
         return _POLICY_CACHE
-    raw = os.environ.get("JARVIS_POLICY_JSON", "").strip()
+    raw = os.environ.get("AARIS_POLICY_JSON", "").strip()
     if not raw:
         # Si no hay env, intentamos con fichero.
         policy_path = os.environ.get(
-            "JARVIS_POLICY_PATH",
-            os.path.join(os.path.expanduser("~"), ".jarvis", "policy.json"),
+            "AARIS_POLICY_PATH",
+            os.path.join(os.path.expanduser("~"), ".aaris", "policy.json"),
         )
         try:
             p = Path(policy_path).expanduser()
@@ -106,7 +106,7 @@ def policy_show() -> str:
 
 def policy_set(policy_json: str, allow_dangerous: bool = False) -> str:
     """
-    Sobrescribe la política en el fichero JARVIS_POLICY_PATH.
+    Sobrescribe la política en el fichero AARIS_POLICY_PATH.
 
     Requiere allow_dangerous=true (esta tool escribe disco).
     """
@@ -119,8 +119,8 @@ def policy_set(policy_json: str, allow_dangerous: bool = False) -> str:
         if not isinstance(parsed, dict):
             return "Error: policy_json debe ser un objeto JSON."
         policy_path = os.environ.get(
-            "JARVIS_POLICY_PATH",
-            os.path.join(os.path.expanduser("~"), ".jarvis", "policy.json"),
+            "AARIS_POLICY_PATH",
+            os.path.join(os.path.expanduser("~"), ".aaris", "policy.json"),
         )
         p = Path(policy_path).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -142,8 +142,8 @@ def policy_reset(allow_dangerous: bool = False) -> str:
         if not allow_dangerous:
             return "Error: policy_reset escribe/borrado disco. Usa allow_dangerous=true."
         policy_path = os.environ.get(
-            "JARVIS_POLICY_PATH",
-            os.path.join(os.path.expanduser("~"), ".jarvis", "policy.json"),
+            "AARIS_POLICY_PATH",
+            os.path.join(os.path.expanduser("~"), ".aaris", "policy.json"),
         )
         p = Path(policy_path).expanduser()
         if p.is_file():
@@ -155,7 +155,7 @@ def policy_reset(allow_dangerous: bool = False) -> str:
         return f"Error en policy_reset: {e}"
 
 def _allow_symlink_escape() -> bool:
-    val = os.environ.get("JARVIS_ALLOW_SYMLINK_ESCAPE", "false").strip().lower()
+    val = os.environ.get("AARIS_ALLOW_SYMLINK_ESCAPE", "false").strip().lower()
     return val in ("1", "true", "yes", "si", "sí", "on")
 
 def _symlink_escapes_home(abs_path: str) -> bool:
@@ -198,13 +198,13 @@ def _validate_symlink_for_path(abs_path: str, allow_escape: bool = False) -> Opt
 
 def _backup_base_dir() -> Path:
     # Por defecto intentamos guardar backups dentro del cwd para compatibilidad con sandboxes.
-    # El usuario puede forzar otra ubicación con `JARVIS_BACKUP_PATH`.
-    if os.environ.get("JARVIS_BACKUP_PATH"):
-        return Path(os.environ.get("JARVIS_BACKUP_PATH", "")).expanduser().resolve()
-    app_dir = os.environ.get("JARVIS_APP_DIR")
+    # El usuario puede forzar otra ubicación con `AARIS_BACKUP_PATH`.
+    if os.environ.get("AARIS_BACKUP_PATH"):
+        return Path(os.environ.get("AARIS_BACKUP_PATH", "")).expanduser().resolve()
+    app_dir = os.environ.get("AARIS_APP_DIR")
     if app_dir:
         return Path(app_dir).expanduser().resolve() / "backups"
-    return Path(os.getcwd()).resolve() / ".jarvis" / "backups"
+    return Path(os.getcwd()).resolve() / ".aaris" / "backups"
 
 def _ensure_backup_dirs() -> tuple[Path, Path]:
     base = _backup_base_dir()
@@ -216,9 +216,9 @@ def _ensure_backup_dirs() -> tuple[Path, Path]:
 
 def _lock_base_dir() -> Path:
     # Prefer a path inside the current working directory for sandbox compatibility.
-    if os.environ.get("JARVIS_LOCK_PATH"):
-        return Path(os.environ.get("JARVIS_LOCK_PATH", "")).expanduser().resolve()
-    return Path(os.getcwd()).resolve() / ".jarvis" / "locks"
+    if os.environ.get("AARIS_LOCK_PATH"):
+        return Path(os.environ.get("AARIS_LOCK_PATH", "")).expanduser().resolve()
+    return Path(os.getcwd()).resolve() / ".aaris" / "locks"
 
 def _acquire_path_lock(abs_path: str, timeout_seconds: int = 25) -> Optional[Path]:
     """
@@ -315,7 +315,7 @@ def rollback(token: str, overwrite: bool = False) -> str:
     """
     try:
         if _read_only_mode() and not _read_only_allow_undo():
-            return "Error: JARVIS_READ_ONLY=true. rollback deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. rollback deshabilitado."
         base = _backup_base_dir()
         meta_path = base / "meta" / f"{token}.json"
         if not meta_path.is_file():
@@ -377,7 +377,7 @@ def rollback_tokens(tokens: str, overwrite: bool = False) -> str:
     """
     try:
         if _read_only_mode() and not _read_only_allow_undo():
-            return "Error: JARVIS_READ_ONLY=true. rollback_tokens deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. rollback_tokens deshabilitado."
         raw = (tokens or "").strip()
         if not raw:
             return "Error: tokens vacío."

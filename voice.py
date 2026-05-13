@@ -1,5 +1,5 @@
 """
-JARVIS Voice Module — STT (Speech-to-Text) y TTS (Text-to-Speech) para Windows.
+AARIS Voice Module — STT (Speech-to-Text) y TTS (Text-to-Speech) para Windows.
 
 Usa `speech_recognition` con Google STT para reconocimiento de voz
 y `pyttsx3` con SAPI5 (nativo Windows) para síntesis de voz.
@@ -16,18 +16,18 @@ from typing import Optional
 # Configuración vía variables de entorno
 # ---------------------------------------------------------------------------
 
-VOICE_LANG = os.environ.get("JARVIS_VOICE_LANG", "es-ES")
-VOICE_RATE = int(os.environ.get("JARVIS_VOICE_RATE", "180"))       # palabras por minuto
-VOICE_VOLUME = float(os.environ.get("JARVIS_VOICE_VOLUME", "1.0"))  # 0.0 a 1.0
-WAKE_WORD = os.environ.get("JARVIS_WAKE_WORD", "jarvis").lower()
-LISTEN_TIMEOUT = int(os.environ.get("JARVIS_LISTEN_TIMEOUT", "5"))
-PHRASE_TIME_LIMIT = int(os.environ.get("JARVIS_PHRASE_TIME_LIMIT", "15"))
-ENERGY_THRESHOLD = int(os.environ.get("JARVIS_ENERGY_THRESHOLD", "300"))
+VOICE_LANG = os.environ.get("AARIS_VOICE_LANG", "es-ES")
+VOICE_RATE = int(os.environ.get("AARIS_VOICE_RATE", "180"))       # palabras por minuto
+VOICE_VOLUME = float(os.environ.get("AARIS_VOICE_VOLUME", "1.0"))  # 0.0 a 1.0
+WAKE_WORD = os.environ.get("AARIS_WAKE_WORD", "aaris").lower()
+LISTEN_TIMEOUT = int(os.environ.get("AARIS_LISTEN_TIMEOUT", "5"))
+PHRASE_TIME_LIMIT = int(os.environ.get("AARIS_PHRASE_TIME_LIMIT", "15"))
+ENERGY_THRESHOLD = int(os.environ.get("AARIS_ENERGY_THRESHOLD", "300"))
 
 # STT Engine: "google" (default, requiere internet) o "whisper" (offline, requiere faster-whisper)
-STT_ENGINE = os.environ.get("JARVIS_STT_ENGINE", "google").strip().lower()
-WHISPER_MODEL = os.environ.get("JARVIS_WHISPER_MODEL", "base")  # tiny, base, small, medium, large
-WHISPER_DEVICE = os.environ.get("JARVIS_WHISPER_DEVICE", "cpu")  # cpu o cuda
+STT_ENGINE = os.environ.get("AARIS_STT_ENGINE", "google").strip().lower()
+WHISPER_MODEL = os.environ.get("AARIS_WHISPER_MODEL", "base")  # tiny, base, small, medium, large
+WHISPER_DEVICE = os.environ.get("AARIS_WHISPER_DEVICE", "cpu")  # cpu o cuda
 
 
 
@@ -243,7 +243,7 @@ class VoiceListener:
         if command:
             return command
 
-        # Si solo dijo "Jarvis", escuchar el comando
+        # Si solo dijo "Aaris", escuchar el comando
         return self.listen_once()
 
     def is_available(self) -> bool:
@@ -400,7 +400,7 @@ class WhisperListener:
 def create_listener():
     """
     Factory: crea el listener STT adecuado según la configuración.
-    Usa JARVIS_STT_ENGINE para seleccionar: "google" (default) o "whisper" (offline).
+    Usa AARIS_STT_ENGINE para seleccionar: "google" (default) o "whisper" (offline).
     """
     if STT_ENGINE == "whisper":
         return WhisperListener()

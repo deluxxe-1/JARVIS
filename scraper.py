@@ -1,5 +1,5 @@
 """
-JARVIS Web Scraper Module — Extracción inteligente de datos web.
+AARIS Web Scraper Module — Extracción inteligente de datos web.
 
 Extrae texto, imágenes, enlaces y datos estructurados de páginas web.
 """
@@ -146,7 +146,7 @@ def scrape_images(
     Args:
         url: URL de la página.
         download: Si True, descarga las imágenes.
-        download_dir: Directorio donde guardar. Si vacío, usa ~/Downloads/jarvis_images/.
+        download_dir: Directorio donde guardar. Si vacío, usa ~/Downloads/aaris_images/.
         max_images: Máximo de imágenes a procesar.
     """
     try:
@@ -191,7 +191,7 @@ def scrape_images(
         downloaded = []
         if download and images:
             if not download_dir:
-                download_dir = os.path.join(os.path.expanduser("~"), "Downloads", "jarvis_images")
+                download_dir = os.path.join(os.path.expanduser("~"), "Downloads", "aaris_images")
             os.makedirs(download_dir, exist_ok=True)
 
             for i, img in enumerate(images):

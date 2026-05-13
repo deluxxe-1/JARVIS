@@ -1,5 +1,5 @@
 """
-JARVIS Intelligence Module — OCR, Resumen de Documentos y Búsqueda Semántica.
+AARIS Intelligence Module — OCR, Resumen de Documentos y Búsqueda Semántica.
 
 Funcionalidades:
 1. OCR: extracción de texto de pantalla/imágenes (pytesseract)
@@ -19,14 +19,14 @@ from typing import Optional, Any
 # Configuración
 # ---------------------------------------------------------------------------
 
-_JARVIS_DIR = Path(os.environ.get(
-    "JARVIS_APP_DIR",
-    os.path.join(os.path.expanduser("~"), ".jarvis"),
+_AARIS_DIR = Path(os.environ.get(
+    "AARIS_APP_DIR",
+    os.path.join(os.path.expanduser("~"), ".aaris"),
 ))
 
-EMBEDDINGS_CACHE_DIR = _JARVIS_DIR / "embeddings_cache"
+EMBEDDINGS_CACHE_DIR = _AARIS_DIR / "embeddings_cache"
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:14b")
-EMBED_MODEL = os.environ.get("JARVIS_EMBED_MODEL", "nomic-embed-text")
+EMBED_MODEL = os.environ.get("AARIS_EMBED_MODEL", "nomic-embed-text")
 
 
 # ============================================================================
@@ -154,6 +154,131 @@ def image_ocr(
         }, ensure_ascii=False)
     except Exception as e:
         return f"Error en image_ocr: {e}"
+
+
+# ---------------------------------------------------------------------------
+# 1b Visión multimodal (Ollama) — requiere modelo con visión, ej. llava, qwen2-vl
+# ---------------------------------------------------------------------------
+
+_VISION_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+
+
+def _prepare_image_path_for_vision(abs_path: str, max_side: int = 1600) -> str:
+    """Reduce imagen muy grande para acelerar envío a Ollama."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return abs_path
+    try:
+        img = Image.open(abs_path)
+        img = img.convert("RGB")
+        w, h = img.size
+        if max(w, h) <= max_side:
+            return abs_path
+        img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+        out_dir = _AARIS_DIR / "inbox"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"_vision_resize_{os.path.basename(abs_path)}.jpg"
+        img.save(out, "JPEG", quality=88)
+        return str(out)
+    except Exception:
+        return abs_path
+
+
+def vision_analyze_image(
+    image_path: str,
+    prompt: str = "",
+    max_side: int = 1600,
+) -> str:
+    """
+    Analiza una imagen o captura con un modelo de visión local (Ollama).
+
+    Usa el modelo configurado en AARIS_VISION_MODEL (por defecto `llava`).
+    Instale un modelo con visión: `ollama pull llava` o `ollama pull qwen2-vl`.
+
+    Args:
+        image_path: Ruta absoluta a PNG, JPG, WEBP, etc.
+        prompt: Pregunta o instrucción (ej. "¿qué error muestra?", "Describe la UI").
+                Si vacío, se pide descripción detallada en español.
+        max_side: Redimensiona si el lado mayor supera este valor (mejor rendimiento).
+    """
+    try:
+        from ollama import chat
+    except ImportError:
+        return "Error: librería 'ollama' no instalada."
+
+    abs_path = os.path.abspath(os.path.expanduser(image_path.strip()))
+    if not os.path.isfile(abs_path):
+        return f"Error: no existe el archivo: {abs_path}"
+
+    ext = os.path.splitext(abs_path)[1].lower()
+    if ext not in _VISION_EXTS:
+        return f"Error: formato no soportado para visión ({ext}). Use: {', '.join(sorted(_VISION_EXTS))}"
+
+    vision_model = os.environ.get("AARIS_VISION_MODEL", "llava").strip() or "llava"
+    path_for_model = _prepare_image_path_for_vision(abs_path, max_side=max_side)
+
+    user_prompt = (prompt or "").strip()
+    if not user_prompt:
+        user_prompt = (
+            "Describe esta imagen en español con todo el detalle útil: texto visible, "
+            "interfaz, errores, diagramas y contexto. Si hay código o mensajes de error, transcríbelos."
+        )
+
+    try:
+        response = chat(
+            model=vision_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                    "images": [path_for_model],
+                }
+            ],
+            options={"temperature": float(os.environ.get("AARIS_VISION_TEMP", "0.15") or 0.15)},
+        )
+    except Exception as e:
+        err_low = str(e).lower()
+        retryable = any(x in err_low for x in ("timeout", "timed out", "deadline", "reset", "connection"))
+        if retryable and max_side > 700:
+            smaller = max(640, min(1200, max_side // 2))
+            path2 = _prepare_image_path_for_vision(abs_path, max_side=smaller)
+            try:
+                response = chat(
+                    model=vision_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": user_prompt,
+                            "images": [path2],
+                        }
+                    ],
+                    options={"temperature": float(os.environ.get("AARIS_VISION_TEMP", "0.15") or 0.15)},
+                )
+            except Exception as e2:
+                return (
+                    f"Error llamando al modelo de visión `{vision_model}` (reintento con imagen más pequeña falló): {e2}\n"
+                    f"Error original: {e}\n"
+                    f"¿Tiene instalado un modelo con visión? Ej.: ollama pull llava\n"
+                    f"Variable AARIS_VISION_MODEL para cambiar el modelo."
+                )
+        else:
+            return (
+                f"Error llamando al modelo de visión `{vision_model}`: {e}\n"
+                f"¿Tiene instalado un modelo con visión? Ej.: ollama pull llava\n"
+                f"Variable AARIS_VISION_MODEL para cambiar el modelo."
+            )
+
+    text = (response.get("message") or {}).get("content", "").strip()
+    return json.dumps(
+        {
+            "status": "ok",
+            "model": vision_model,
+            "image": abs_path,
+            "analysis": text,
+        },
+        ensure_ascii=False,
+    )
 
 
 # ============================================================================
@@ -307,7 +432,7 @@ def summarize_document(
         )
 
         response = chat(
-            model=OLLAMA_MODEL,
+            model=os.environ.get("AARIS_MODEL", OLLAMA_MODEL),
             messages=[{"role": "user", "content": prompt}],
             options={"temperature": 0.3},
         )
@@ -325,6 +450,91 @@ def summarize_document(
         }, ensure_ascii=False)
     except Exception as e:
         return f"Error en summarize_document: {e}"
+
+
+def document_ask(
+    file_path: str,
+    question: str,
+    max_chars: int = 38000,
+    language: str = "español",
+) -> str:
+    """
+    Extrae texto de un PDF (u otro documento soportado) y responde a una pregunta con el LLM local.
+
+    Para un resumen genérico sin pregunta concreta suele bastar `summarize_document`.
+
+    Args:
+        file_path: Ruta al documento.
+        question: Qué debe hacer el modelo (resumen, extraer datos, explicar una cláusula, etc.).
+        max_chars: Máximo de texto del documento que se envía al modelo.
+        language: Idioma de la respuesta.
+    """
+    try:
+        q = (question or "").strip()
+        if not q:
+            return "Error: `question` no puede estar vacía. Indique qué desea saber del documento."
+
+        extract_result = extract_document_text(file_path, max_chars=max_chars + 5000)
+        try:
+            extract_data = json.loads(extract_result)
+            if extract_data.get("status") != "ok":
+                return extract_result
+            text = extract_data.get("text", "")
+        except Exception:
+            if extract_result.startswith("Error"):
+                return extract_result
+            text = extract_result
+
+        if not text.strip():
+            return "Error: el documento está vacío o no se pudo extraer texto."
+
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n\n[...documento truncado para el modelo...]"
+
+        try:
+            from ollama import chat
+        except ImportError:
+            return "Error: librería 'ollama' no instalada."
+
+        prompt = (
+            f"Eres un asistente experto. Responde en {language} usando SOLO la información del documento siguiente. "
+            f"Si la respuesta no está en el documento, dilo claramente. Sé concreto.\n\n"
+            f"Pregunta o instrucción del usuario:\n{q}\n\n"
+            f"--- DOCUMENTO ---\n{text}\n--- FIN ---"
+        )
+
+        def _doc_chat(temp: float):
+            return chat(
+                model=os.environ.get("AARIS_MODEL", OLLAMA_MODEL),
+                messages=[{"role": "user", "content": prompt}],
+                options={"temperature": temp},
+            )
+
+        try:
+            response = _doc_chat(0.25)
+        except Exception as e:
+            err_low = str(e).lower()
+            if any(x in err_low for x in ("timeout", "timed out", "deadline", "reset", "connection")):
+                try:
+                    response = _doc_chat(0.2)
+                except Exception as e2:
+                    return f"Error en document_ask (reintento tras timeout): {e2}. Original: {e}"
+            else:
+                return f"Error en document_ask: {e}"
+
+        answer = response["message"].get("content", "").strip()
+        abs_path = os.path.abspath(os.path.expanduser(file_path))
+        return json.dumps(
+            {
+                "status": "ok",
+                "file": abs_path,
+                "question": q,
+                "answer": answer,
+            },
+            ensure_ascii=False,
+        )
+    except Exception as e:
+        return f"Error en document_ask: {e}"
 
 
 # ============================================================================

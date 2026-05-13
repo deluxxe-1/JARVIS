@@ -16,7 +16,7 @@ import hashlib
 import time
 from contextlib import contextmanager
 
-from jarvis.tools.core import *
+from aaris.tools.core import *
 
 def db_query_sqlite(db_path: str, query: str) -> str:
     """Ejecuta una consulta SQL en una base de datos SQLite (.db, .sqlite)."""
@@ -25,7 +25,7 @@ def db_query_sqlite(db_path: str, query: str) -> str:
         resolved = resolve_path(db_path, must_exist=True)
         if resolved.startswith("Error:"): return resolved
         if _read_only_mode() and not query.strip().upper().startswith("SELECT"):
-            return "Error: JARVIS_READ_ONLY=true, solo SELECT está permitido."
+            return "Error: AARIS_READ_ONLY=true, solo SELECT está permitido."
             
         with sqlite3.connect(resolved) as conn:
             conn.row_factory = sqlite3.Row

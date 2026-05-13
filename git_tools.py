@@ -1,5 +1,5 @@
 """
-JARVIS Git Assistant Module — Operaciones inteligentes de Git.
+AARIS Git Assistant Module — Operaciones inteligentes de Git.
 
 Analiza repos, genera commits con IA, gestiona ramas y describe PRs.
 """

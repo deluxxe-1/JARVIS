@@ -16,7 +16,7 @@ import hashlib
 import time
 from contextlib import contextmanager
 
-from jarvis.tools.core import *
+from aaris.tools.core import *
 
 def docker_ps() -> str:
     """Ejecuta docker ps y devuelve el listado de contenedores corriendo."""

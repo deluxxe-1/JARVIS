@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jarvis-local"
+name = "aaris-local"
 version = "0.1.0"
-description = "Asistente local tipo J.A.R.V.I.S. con Ollama, tools, CLI y GUI"
+description = "Asistente local tipo A.A.R.I.S. con Ollama, tools, CLI y GUI"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -39,12 +39,12 @@ all = [
 ]
 
 [project.scripts]
-jarvis = "jarvis.engine:main"
-jarvis-gui = "gui:main"
+aaris = "aaris.engine:main"
+aaris-gui = "gui:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["jarvis*"]
+include = ["aaris*"]
 
 [tool.setuptools]
 py-modules = [

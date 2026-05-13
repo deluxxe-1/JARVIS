@@ -1,3 +1,10 @@
+"""
+DEPRECATED — herramientas legacy duplicadas del filesystem y otros módulos.
+
+No añadas nuevas integraciones aquí. Usa `aaris.tools.*` y `aaris.tools_registry`.
+Se mantiene solo por compatibilidad con código antiguo que aún importe desde este archivo.
+"""
+
 import glob as glob_module
 import json
 import os
@@ -33,12 +40,12 @@ def _is_relative_to(path: Path, base: Path) -> bool:
 
 
 def _read_only_mode() -> bool:
-    val = os.environ.get("JARVIS_READ_ONLY", "false").strip().lower()
+    val = os.environ.get("AARIS_READ_ONLY", "false").strip().lower()
     return val in ("1", "true", "yes", "si", "sí", "on")
 
 
 def _read_only_allow_undo() -> bool:
-    val = os.environ.get("JARVIS_READ_ONLY_ALLOW_UNDO", "true").strip().lower()
+    val = os.environ.get("AARIS_READ_ONLY_ALLOW_UNDO", "true").strip().lower()
     return val in ("1", "true", "yes", "si", "sí", "on")
 
 
@@ -47,19 +54,19 @@ _POLICY_CACHE: Optional[dict[str, Any]] = None
 
 def _load_policy() -> dict[str, Any]:
     """
-    Carga políticas desde env `JARVIS_POLICY_JSON` (string JSON).
+    Carga políticas desde env `AARIS_POLICY_JSON` (string JSON).
     Ejemplo:
-      export JARVIS_POLICY_JSON='{"forbidden_path_prefixes":["/etc/"],"require_confirm_tools":["delete_path"]}'
+      export AARIS_POLICY_JSON='{"forbidden_path_prefixes":["/etc/"],"require_confirm_tools":["delete_path"]}'
     """
     global _POLICY_CACHE
     if _POLICY_CACHE is not None:
         return _POLICY_CACHE
-    raw = os.environ.get("JARVIS_POLICY_JSON", "").strip()
+    raw = os.environ.get("AARIS_POLICY_JSON", "").strip()
     if not raw:
         # Si no hay env, intentamos con fichero.
         policy_path = os.environ.get(
-            "JARVIS_POLICY_PATH",
-            os.path.join(os.path.expanduser("~"), ".jarvis", "policy.json"),
+            "AARIS_POLICY_PATH",
+            os.path.join(os.path.expanduser("~"), ".aaris", "policy.json"),
         )
         try:
             p = Path(policy_path).expanduser()
@@ -112,7 +119,7 @@ def policy_show() -> str:
 
 def policy_set(policy_json: str, allow_dangerous: bool = False) -> str:
     """
-    Sobrescribe la política en el fichero JARVIS_POLICY_PATH.
+    Sobrescribe la política en el fichero AARIS_POLICY_PATH.
 
     Requiere allow_dangerous=true (esta tool escribe disco).
     """
@@ -125,8 +132,8 @@ def policy_set(policy_json: str, allow_dangerous: bool = False) -> str:
         if not isinstance(parsed, dict):
             return "Error: policy_json debe ser un objeto JSON."
         policy_path = os.environ.get(
-            "JARVIS_POLICY_PATH",
-            os.path.join(os.path.expanduser("~"), ".jarvis", "policy.json"),
+            "AARIS_POLICY_PATH",
+            os.path.join(os.path.expanduser("~"), ".aaris", "policy.json"),
         )
         p = Path(policy_path).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -149,8 +156,8 @@ def policy_reset(allow_dangerous: bool = False) -> str:
         if not allow_dangerous:
             return "Error: policy_reset escribe/borrado disco. Usa allow_dangerous=true."
         policy_path = os.environ.get(
-            "JARVIS_POLICY_PATH",
-            os.path.join(os.path.expanduser("~"), ".jarvis", "policy.json"),
+            "AARIS_POLICY_PATH",
+            os.path.join(os.path.expanduser("~"), ".aaris", "policy.json"),
         )
         p = Path(policy_path).expanduser()
         if p.is_file():
@@ -163,7 +170,7 @@ def policy_reset(allow_dangerous: bool = False) -> str:
 
 
 def _allow_symlink_escape() -> bool:
-    val = os.environ.get("JARVIS_ALLOW_SYMLINK_ESCAPE", "false").strip().lower()
+    val = os.environ.get("AARIS_ALLOW_SYMLINK_ESCAPE", "false").strip().lower()
     return val in ("1", "true", "yes", "si", "sí", "on")
 
 
@@ -209,13 +216,13 @@ def _validate_symlink_for_path(abs_path: str, allow_escape: bool = False) -> Opt
 
 def _backup_base_dir() -> Path:
     # Por defecto intentamos guardar backups dentro del cwd para compatibilidad con sandboxes.
-    # El usuario puede forzar otra ubicación con `JARVIS_BACKUP_PATH`.
-    if os.environ.get("JARVIS_BACKUP_PATH"):
-        return Path(os.environ.get("JARVIS_BACKUP_PATH", "")).expanduser().resolve()
-    app_dir = os.environ.get("JARVIS_APP_DIR")
+    # El usuario puede forzar otra ubicación con `AARIS_BACKUP_PATH`.
+    if os.environ.get("AARIS_BACKUP_PATH"):
+        return Path(os.environ.get("AARIS_BACKUP_PATH", "")).expanduser().resolve()
+    app_dir = os.environ.get("AARIS_APP_DIR")
     if app_dir:
         return Path(app_dir).expanduser().resolve() / "backups"
-    return Path(os.getcwd()).resolve() / ".jarvis" / "backups"
+    return Path(os.getcwd()).resolve() / ".aaris" / "backups"
 
 
 def _ensure_backup_dirs() -> tuple[Path, Path]:
@@ -229,9 +236,9 @@ def _ensure_backup_dirs() -> tuple[Path, Path]:
 
 def _lock_base_dir() -> Path:
     # Prefer a path inside the current working directory for sandbox compatibility.
-    if os.environ.get("JARVIS_LOCK_PATH"):
-        return Path(os.environ.get("JARVIS_LOCK_PATH", "")).expanduser().resolve()
-    return Path(os.getcwd()).resolve() / ".jarvis" / "locks"
+    if os.environ.get("AARIS_LOCK_PATH"):
+        return Path(os.environ.get("AARIS_LOCK_PATH", "")).expanduser().resolve()
+    return Path(os.getcwd()).resolve() / ".aaris" / "locks"
 
 
 def _acquire_path_lock(abs_path: str, timeout_seconds: int = 25) -> Optional[Path]:
@@ -335,7 +342,7 @@ def rollback(token: str, overwrite: bool = False) -> str:
     """
     try:
         if _read_only_mode() and not _read_only_allow_undo():
-            return "Error: JARVIS_READ_ONLY=true. rollback deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. rollback deshabilitado."
         base = _backup_base_dir()
         meta_path = base / "meta" / f"{token}.json"
         if not meta_path.is_file():
@@ -398,7 +405,7 @@ def rollback_tokens(tokens: str, overwrite: bool = False) -> str:
     """
     try:
         if _read_only_mode() and not _read_only_allow_undo():
-            return "Error: JARVIS_READ_ONLY=true. rollback_tokens deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. rollback_tokens deshabilitado."
         raw = (tokens or "").strip()
         if not raw:
             return "Error: tokens vacío."
@@ -491,7 +498,7 @@ def create_file(path: str, content: str = "") -> str:
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. create_file deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. create_file deshabilitado."
         resolved = resolve_path(path, must_exist=False)
         if resolved.startswith("Error:"):
             return resolved
@@ -559,7 +566,7 @@ def edit_file(path: str, new_content: str) -> str:
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. edit_file deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. edit_file deshabilitado."
         resolved = resolve_path(path, must_exist=True)
         if resolved.startswith("Error:"):
             return resolved
@@ -611,7 +618,7 @@ def search_replace_in_file(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. search_replace_in_file deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. search_replace_in_file deshabilitado."
         resolved = resolve_path(path, must_exist=True)
         if resolved.startswith("Error:"):
             return resolved
@@ -666,7 +673,7 @@ def create_folder(path: str) -> str:
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. create_folder deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. create_folder deshabilitado."
         resolved = resolve_path(path, must_exist=False)
         if resolved.startswith("Error:"):
             return resolved
@@ -1202,7 +1209,7 @@ def service_restart(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. service_restart deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. service_restart deshabilitado."
         if not shutil.which("systemctl"):
             return "Error: no existe `systemctl`."
         if not service_name or "/" in service_name:
@@ -1306,7 +1313,7 @@ def service_restart_with_deps(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. service_restart_with_deps deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. service_restart_with_deps deshabilitado."
         if not shutil.which("systemctl"):
             return "Error: no existe `systemctl`."
         if not service_name or "/" in service_name:
@@ -1516,7 +1523,7 @@ def build_text_index(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. build_text_index deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. build_text_index deshabilitado."
 
         resolved_root = resolve_path(root, must_exist=True)
         if resolved_root.startswith("Error:"):
@@ -1524,7 +1531,7 @@ def build_text_index(
         base = Path(resolved_root).resolve()
 
         if index_path is None:
-            index_path = os.path.join(os.getcwd(), ".jarvis", "rag_text_index.json")
+            index_path = os.path.join(os.getcwd(), ".aaris", "rag_text_index.json")
         index_path = os.path.abspath(os.path.expanduser(index_path))
         Path(os.path.dirname(index_path)).mkdir(parents=True, exist_ok=True)
 
@@ -1592,7 +1599,7 @@ def rag_query(
         if not query or not query.strip():
             return "Error: query vacía."
         if index_path is None:
-            index_path = os.path.join(os.getcwd(), ".jarvis", "rag_text_index.json")
+            index_path = os.path.join(os.getcwd(), ".aaris", "rag_text_index.json")
         index_path = os.path.abspath(os.path.expanduser(index_path))
         if not os.path.isfile(index_path):
             return "Error: no existe el índice. Ejecuta build_text_index primero."
@@ -1629,14 +1636,14 @@ def apply_template(template_name: str, destination: str, context_json: str = "{}
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. apply_template deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. apply_template deshabilitado."
         ctx = json.loads(context_json or "{}")
         if not isinstance(ctx, dict):
             ctx = {}
 
         template_dir = os.environ.get(
-            "JARVIS_TEMPLATE_DIR",
-            os.path.join(os.path.expanduser("~"), ".jarvis", "templates"),
+            "AARIS_TEMPLATE_DIR",
+            os.path.join(os.path.expanduser("~"), ".aaris", "templates"),
         )
         template_dir = os.path.abspath(os.path.expanduser(template_dir))
 
@@ -1741,7 +1748,7 @@ def scaffold_project(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. scaffold_project deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. scaffold_project deshabilitado."
 
         ptype = (project_type or "").strip().lower()
         if not ptype:
@@ -1780,7 +1787,7 @@ def scaffold_project(
                 "<body>\n"
                 "  <main class=\"container\">\n"
                 f"    <h1>{safe_name}</h1>\n"
-                "    <p>Proyecto creado por JARVIS.</p>\n"
+                "    <p>Proyecto creado por AARIS.</p>\n"
                 "    <button id=\"btn\">Probar</button>\n"
                 "    <pre id=\"out\"></pre>\n"
                 "  </main>\n"
@@ -1832,7 +1839,7 @@ def scaffold_project(
             (app_dir / "__init__.py").write_text("", encoding="utf-8")
             (app_dir / "main.py").write_text(
                 "from fastapi import FastAPI\n\n"
-                "app = FastAPI(title=\"jarvis-api\")\n\n"
+                "app = FastAPI(title=\"aaris-api\")\n\n"
                 "@app.get(\"/health\")\n"
                 "def health():\n"
                 "    return {\"status\": \"ok\"}\n",
@@ -1905,7 +1912,7 @@ def append_file(path: str, content: str) -> str:
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. append_file deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. append_file deshabilitado."
         resolved = resolve_path(path, must_exist=False)
         if resolved.startswith("Error:"):
             return resolved
@@ -1939,7 +1946,7 @@ def insert_after(path: str, anchor_text: str, insert_text: str, occurrence_index
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. insert_after deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. insert_after deshabilitado."
         resolved = resolve_path(path, must_exist=True)
         if resolved.startswith("Error:"):
             return resolved
@@ -1995,7 +2002,7 @@ def copy_path(from_path: str, to_path: str, overwrite: bool = False, allow_dange
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. copy_path deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. copy_path deshabilitado."
         src = Path(resolve_path(from_path, must_exist=True))
         dst = Path(resolve_path(to_path, must_exist=False))
         if src.is_symlink():
@@ -2028,7 +2035,7 @@ def move_path(from_path: str, to_path: str, overwrite: bool = False, allow_dange
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. move_path deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. move_path deshabilitado."
         src = Path(resolve_path(from_path, must_exist=True))
         dst = Path(resolve_path(to_path, must_exist=False))
         if src.is_symlink():
@@ -2060,7 +2067,7 @@ def move_path(from_path: str, to_path: str, overwrite: bool = False, allow_dange
 
 
 def _trash_enabled() -> bool:
-    val = os.environ.get("JARVIS_USE_TRASH", "true").strip().lower()
+    val = os.environ.get("AARIS_USE_TRASH", "true").strip().lower()
     return val not in ("0", "false", "no", "off")
 
 
@@ -2110,7 +2117,7 @@ def delete_path(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. delete_path deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. delete_path deshabilitado."
         resolved = resolve_path(path, must_exist=True)
         if resolved.startswith("Error:"):
             return resolved
@@ -2127,8 +2134,8 @@ def delete_path(
         if str(target) == "/":
             return "Error: no se permite borrar `/`."
 
-        min_bytes_for_confirm = int(os.environ.get("JARVIS_DELETE_CONFIRM_MIN_BYTES", "50000000"))
-        min_entries_for_confirm = int(os.environ.get("JARVIS_DELETE_CONFIRM_MIN_ENTRIES", "200"))
+        min_bytes_for_confirm = int(os.environ.get("AARIS_DELETE_CONFIRM_MIN_BYTES", "50000000"))
+        min_entries_for_confirm = int(os.environ.get("AARIS_DELETE_CONFIRM_MIN_ENTRIES", "200"))
         sensitive_dir_names = {".ssh", ".gnupg", ".kube", ".kubernetes"}
         sensitive_file_names = {".bashrc", ".zshrc", ".profile", ".bash_profile", ".gitconfig", ".config"}
 
@@ -2155,7 +2162,7 @@ def delete_path(
 
             # Selección segura para directorios grandes (si no se especifica filtro).
             effective_threshold = max_entries if max_entries is not None else int(
-                os.environ.get("JARVIS_DELETE_LARGE_DIR_MAX_ENTRIES", "2000")
+                os.environ.get("AARIS_DELETE_LARGE_DIR_MAX_ENTRIES", "2000")
             )
             if glob_filter is None and effective_threshold > 0:
                 immediate = 0
@@ -2285,7 +2292,7 @@ def run_command(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. run_command deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. run_command deshabilitado."
 
         if not allow_dangerous:
             # Heurísticas para evitar ejecutar borrados/reescrituras masivas sin confirmación explícita.
@@ -2311,7 +2318,7 @@ def run_command(
                         "`run_command(..., allow_dangerous=true)`."
                     )
 
-        allowlist_only = os.environ.get("JARVIS_COMMAND_ALLOWLIST_ONLY", "false").strip().lower() in (
+        allowlist_only = os.environ.get("AARIS_COMMAND_ALLOWLIST_ONLY", "false").strip().lower() in (
             "1",
             "true",
             "yes",
@@ -2321,7 +2328,7 @@ def run_command(
         )
         if allowlist_only:
             allowlist_raw = os.environ.get(
-                "JARVIS_COMMAND_ALLOWLIST",
+                "AARIS_COMMAND_ALLOWLIST",
                 "ls,cat,head,tail,stat,du,df,rg,systemctl,journalctl,ps,pwd,echo,whoami",
             )
             allowed = {x.strip() for x in allowlist_raw.split(",") if x.strip()}
@@ -2332,18 +2339,18 @@ def run_command(
             disallowed_chars = ["|", ";", "&&", "||", ">", "<", "\n", "\r", "`", "$(", "&"]
             for token in disallowed_chars:
                 if token in cmd:
-                    return "Error: JARVIS_COMMAND_ALLOWLIST_ONLY no permite operadores de shell (tuberías/redirecciones/composición)."
+                    return "Error: AARIS_COMMAND_ALLOWLIST_ONLY no permite operadores de shell (tuberías/redirecciones/composición)."
             parts = cmd.split()
             first = parts[0] if parts else ""
             second = parts[1] if len(parts) > 1 else ""
             # Reglas simples para herramientas comunes.
             if first == "systemctl" and second not in ("status", "show"):
-                return "Error: JARVIS_COMMAND_ALLOWLIST_ONLY. systemctl restringido a status/show."
+                return "Error: AARIS_COMMAND_ALLOWLIST_ONLY. systemctl restringido a status/show."
             if first == "journalctl" and second and not second.startswith("--since"):
                 # No bloqueamos demasiado: pero restringimos el primer argumento.
                 pass
             if first and first not in allowed:
-                return f"Error: JARVIS_COMMAND_ALLOWLIST_ONLY. comando no permitido: {first}"
+                return f"Error: AARIS_COMMAND_ALLOWLIST_ONLY. comando no permitido: {first}"
 
         if cwd:
             resolved_cwd = resolve_path(cwd, must_exist=True)
@@ -2354,10 +2361,10 @@ def run_command(
             work = None
         if work and not os.path.isdir(work):
             return f"Error: cwd no es un directorio: {work}"
-        sandbox_mode = os.environ.get("JARVIS_COMMAND_SANDBOX", "").strip().lower()
+        sandbox_mode = os.environ.get("AARIS_COMMAND_SANDBOX", "").strip().lower()
         if sandbox_mode == "firejail":
             if not shutil.which("firejail"):
-                return "Error: JARVIS_COMMAND_SANDBOX=firejail pero `firejail` no está instalado."
+                return "Error: AARIS_COMMAND_SANDBOX=firejail pero `firejail` no está instalado."
             # Ejecutamos dentro de firejail sin red y con home privado.
             proc = subprocess.run(
                 ["firejail", "--quiet", "--net=none", "--private-home", "sh", "-lc", command],
@@ -2405,7 +2412,7 @@ def run_command_checked(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. run_command_checked deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. run_command_checked deshabilitado."
 
         # Reutilizamos run_command para respetar heurísticas y sandbox.
         out = run_command(
@@ -2493,7 +2500,7 @@ def install_packages(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. install_packages deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. install_packages deshabilitado."
 
         tokens = [t.strip() for t in (packages or "").replace(";", ",").replace("|", ",").split(",")]
         tokens = [t for t in tokens if t]
@@ -2576,7 +2583,7 @@ def apply_unified_patch(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. apply_unified_patch deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. apply_unified_patch deshabilitado."
         if _policy_require_confirm("apply_unified_patch") and not confirm and not allow_dangerous:
             return "Error: política requiere confirm=true para apply_unified_patch."
         if not confirm and not allow_dangerous:
@@ -2606,7 +2613,7 @@ def apply_unified_patch(
             resolved_workdir = str(target_file.parent.resolve())
 
         with _path_lock(str(target_file.resolve())):
-            patch_tmp = Path(resolved_workdir) / f".jarvis_patch_{uuid.uuid4().hex}.diff"
+            patch_tmp = Path(resolved_workdir) / f".aaris_patch_{uuid.uuid4().hex}.diff"
             patch_tmp.write_text(patch_text or "", encoding="utf-8")
             proc = subprocess.run(
                 ["patch", f"-p{int(strip)}", "--batch", "-i", str(patch_tmp)],
@@ -2721,7 +2728,7 @@ def db_query_sqlite(db_path: str, query: str) -> str:
         resolved = resolve_path(db_path, must_exist=True)
         if resolved.startswith("Error:"): return resolved
         if _read_only_mode() and not query.strip().upper().startswith("SELECT"):
-            return "Error: JARVIS_READ_ONLY=true, solo SELECT está permitido."
+            return "Error: AARIS_READ_ONLY=true, solo SELECT está permitido."
             
         with sqlite3.connect(resolved) as conn:
             conn.row_factory = sqlite3.Row
@@ -2758,10 +2765,10 @@ def schedule_agent_task(cron_expr: str, prompt: str, task_name: str) -> str:
         agent_script = str(Path(__file__).resolve().parent / "main.py")
         import shlex, sys
         prompt_q = shlex.quote(prompt)
-        command = f"{sys.executable} {agent_script} --run-prompt {prompt_q} >> ~/.jarvis/cron.log 2>&1"
+        command = f"{sys.executable} {agent_script} --run-prompt {prompt_q} >> ~/.aaris/cron.log 2>&1"
         cron_line = f"{cron_expr} {command}\n"
         
-        cron_file = Path.home() / ".jarvis" / "crontab.txt"
+        cron_file = Path.home() / ".aaris" / "crontab.txt"
         cron_file.parent.mkdir(parents=True, exist_ok=True)
         
         proc = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
@@ -2770,7 +2777,7 @@ def schedule_agent_task(cron_expr: str, prompt: str, task_name: str) -> str:
         if cron_line in current_cron:
             return f"Tarea '{task_name}' ya estaba programada."
             
-        new_cron = current_cron.strip() + "\n" + f"# JARVIS_TASK: {task_name}\n{cron_line}"
+        new_cron = current_cron.strip() + "\n" + f"# AARIS_TASK: {task_name}\n{cron_line}"
         cron_file.write_text(new_cron, encoding="utf-8")
         
         apply_proc = subprocess.run(["crontab", str(cron_file)], capture_output=True, text=True)

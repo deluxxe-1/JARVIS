@@ -1,6 +1,6 @@
-from jarvis.tools.core import _norm_text, policy_reset, policy_set, policy_show, rollback, rollback_tokens
-from jarvis.tools.docker import docker_exec, docker_logs, docker_ps
-from jarvis.tools.filesystem import (
+from aaris.tools.core import _norm_text, policy_reset, policy_set, policy_show, rollback, rollback_tokens
+from aaris.tools.docker import docker_exec, docker_logs, docker_ps
+from aaris.tools.filesystem import (
     append_file,
     copy_path,
     count_dir_children_matches,
@@ -23,10 +23,10 @@ from jarvis.tools.filesystem import (
     stat_path,
     tail_file,
 )
-from jarvis.tools.project import apply_template, detect_project, project_workflow_suggest, scaffold_project
-from jarvis.tools.search import build_text_index, rag_query
-from jarvis.tools.sqlite import db_query_sqlite
-from jarvis.tools.system import (
+from aaris.tools.project import apply_template, detect_project, project_workflow_suggest, scaffold_project
+from aaris.tools.search import build_text_index, rag_query
+from aaris.tools.sqlite import db_query_sqlite
+from aaris.tools.system import (
     install_packages,
     list_processes,
     run_command,

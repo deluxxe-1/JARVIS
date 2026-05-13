@@ -1,5 +1,5 @@
 """
-Tests básicos para JARVIS tools — adaptados a Windows.
+Tests básicos para AARIS tools — adaptados a Windows.
 """
 
 import os
@@ -69,9 +69,9 @@ class TestNormText:
 
 class TestCreateFile:
     def test_create_simple(self, tmp_workspace):
-        result = create_file(str(tmp_workspace / "test.txt"), "Hola JARVIS")
+        result = create_file(str(tmp_workspace / "test.txt"), "Hola AARIS")
         assert "creado correctamente" in result.lower() or "creado" in result.lower()
-        assert (tmp_workspace / "test.txt").read_text(encoding="utf-8") == "Hola JARVIS"
+        assert (tmp_workspace / "test.txt").read_text(encoding="utf-8") == "Hola AARIS"
 
     def test_create_with_dirs(self, tmp_workspace):
         result = create_file(str(tmp_workspace / "sub" / "dir" / "file.txt"), "contenido")

@@ -1,14 +1,14 @@
 """
-JARVIS Dev Agent — Agente autónomo de programación.
+AARIS Dev Agent — Agente autónomo de programación.
 
-Permite a JARVIS trabajar en proyectos de código mientras el usuario duerme:
+Permite a AARIS trabajar en proyectos de código mientras el usuario duerme:
 - Ejecuta tareas de programación en background con progreso persistente
 - Soporta proyectos multi-fase (planificar → implementar → testear → reportar)
 - Reintentos automáticos ante fallos
 - Notificaciones al finalizar
 - Programación con cron/scheduler
 
-Uso desde JARVIS:
+Uso desde AARIS:
     "crea un agente que construya una API REST en Flask y la testee"
     "programa para las 3am que el agente refactorice el módulo X"
     "qué está haciendo el agente dev_api?"
@@ -30,16 +30,16 @@ from typing import Any, Optional
 # Configuración
 # ---------------------------------------------------------------------------
 
-_JARVIS_DIR = Path(os.environ.get(
-    "JARVIS_APP_DIR",
-    os.path.join(os.path.expanduser("~"), ".jarvis"),
+_AARIS_DIR = Path(os.environ.get(
+    "AARIS_APP_DIR",
+    os.path.join(os.path.expanduser("~"), ".aaris"),
 ))
 
-DEV_AGENTS_DIR = _JARVIS_DIR / "dev_agents"
+DEV_AGENTS_DIR = _AARIS_DIR / "dev_agents"
 AGENT_REGISTRY_PATH = DEV_AGENTS_DIR / "registry.json"
 
 # Cuántas rondas máximas de tool-calling usa el agente dev por fase
-DEV_AGENT_ROUNDS_PER_PHASE = int(os.environ.get("JARVIS_DEV_AGENT_ROUNDS", "30"))
+DEV_AGENT_ROUNDS_PER_PHASE = int(os.environ.get("AARIS_DEV_AGENT_ROUNDS", "30"))
 
 # Fases estándar de un proyecto de programación
 PROJECT_PHASES = ["plan", "scaffold", "implement", "test", "refine", "report"]
@@ -233,7 +233,7 @@ def _run_agent_phase(
 
     # Importar todas las tools disponibles
     try:
-        from jarvis.tools_registry import get_all_tools
+        from aaris.tools_registry import get_all_tools
         available_tools = get_all_tools()
     except Exception:
         from tools import (
@@ -253,7 +253,7 @@ def _run_agent_phase(
 
     tool_map = {f.__name__: f for f in available_tools}
 
-    system_prompt = f"""Eres JARVIS, un agente autónomo de programación experto.
+    system_prompt = f"""Eres AARIS, un agente autónomo de programación experto.
 Trabajas de forma completamente autónoma — el usuario no está presente.
 Directorio de trabajo: {cwd}
 Agente: {agent_name}
@@ -351,7 +351,7 @@ def _run_dev_project(
 ) -> None:
     """Loop principal del agente — ejecuta todas las fases en orden."""
     _ensure_dirs()
-    _append_log(agent_name, f"=== JARVIS Dev Agent '{agent_name}' iniciado ===")
+    _append_log(agent_name, f"=== AARIS Dev Agent '{agent_name}' iniciado ===")
     _append_log(agent_name, f"Tarea: {task}")
     _append_log(agent_name, f"Directorio: {project_dir}")
     _append_log(agent_name, f"Fases: {' → '.join(phases)}")
@@ -411,7 +411,7 @@ def _run_dev_project(
             try:
                 from automation import show_notification
                 show_notification(
-                    title=f"✅ JARVIS Dev Agent: {agent_name}",
+                    title=f"✅ AARIS Dev Agent: {agent_name}",
                     message=f"Proyecto completado. Resultado en {_agent_result_path(agent_name)}",
                     timeout=30,
                 )
@@ -420,7 +420,7 @@ def _run_dev_project(
 
 
 # ---------------------------------------------------------------------------
-# API pública — tools que JARVIS puede llamar
+# API pública — tools que AARIS puede llamar
 # ---------------------------------------------------------------------------
 
 def dev_agent_create(
@@ -497,7 +497,7 @@ def dev_agent_create(
             except Exception as e:
                 _append_log(name, f"Error fatal: {e}")
 
-        t = threading.Thread(target=_run, daemon=True, name=f"jarvis-dev-{name}")
+        t = threading.Thread(target=_run, daemon=True, name=f"aaris-dev-{name}")
         t.start()
 
         return json.dumps({
@@ -706,7 +706,7 @@ def dev_agent_schedule(
             Path(proj_dir).mkdir(parents=True, exist_ok=True)
             _run_dev_project(name, task, proj_dir, model, phase_list, notify=True)
 
-        t = threading.Thread(target=_delayed_run, daemon=True, name=f"jarvis-sched-{name}")
+        t = threading.Thread(target=_delayed_run, daemon=True, name=f"aaris-sched-{name}")
         t.start()
 
         wait_h = int(wait_seconds // 3600)

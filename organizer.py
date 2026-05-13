@@ -1,5 +1,5 @@
 """
-JARVIS Smart File Organizer Module.
+AARIS Smart File Organizer Module.
 
 Organiza automáticamente carpetas (como Descargas), detecta duplicados,
 y limpia archivos antiguos.

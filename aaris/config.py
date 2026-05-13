@@ -15,13 +15,13 @@ class Settings:
     ollama_model: str = os.environ.get("OLLAMA_MODEL", "qwen2.5:14b")
 
     # App data
-    jarvis_app_dir: str = os.environ.get(
-        "JARVIS_APP_DIR",
-        os.path.join(os.path.expanduser("~"), ".jarvis"),
+    aaris_app_dir: str = os.environ.get(
+        "AARIS_APP_DIR",
+        os.path.join(os.path.expanduser("~"), ".aaris"),
     )
 
     # Tools runtime policies
-    jarvis_read_only: bool = os.environ.get("JARVIS_READ_ONLY", "false").strip().lower() in (
+    aaris_read_only: bool = os.environ.get("AARIS_READ_ONLY", "false").strip().lower() in (
         "1",
         "true",
         "yes",

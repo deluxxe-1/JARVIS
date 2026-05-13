@@ -1,5 +1,5 @@
 """
-JARVIS Automation Module — Control y automatización del PC (Windows).
+AARIS Automation Module — Control y automatización del PC (Windows).
 
 Provee herramientas para:
 - Abrir/cerrar aplicaciones
@@ -389,7 +389,7 @@ def take_screenshot(
             if not os.path.isdir(desktop):
                 desktop = os.path.expanduser("~")
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output = os.path.join(desktop, f"jarvis_screenshot_{timestamp}.png")
+            output = os.path.join(desktop, f"aaris_screenshot_{timestamp}.png")
 
         # Crear directorio padre si no existe
         os.makedirs(os.path.dirname(output), exist_ok=True)
@@ -515,7 +515,7 @@ def set_clipboard(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def show_notification(
-    title: str = "JARVIS",
+    title: str = "AARIS",
     message: str = "",
     timeout: int = 10,
 ) -> str:
@@ -538,7 +538,7 @@ def show_notification(
                 title=title,
                 message=message,
                 timeout=timeout,
-                app_name="JARVIS",
+                app_name="AARIS",
             )
             return f"Notificación mostrada: '{title}'"
         except ImportError:
@@ -561,7 +561,7 @@ $template = @"
 $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
 $xml.LoadXml($template)
 $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("JARVIS").Show($toast)
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("AARIS").Show($toast)
 '''
         rc, stdout, stderr = _run_ps(script, timeout=10)
         if rc == 0:

@@ -1,5 +1,5 @@
 """
-JARVIS Clipboard Intelligence Module.
+AARIS Clipboard Intelligence Module.
 
 Analiza el contenido del portapapeles y sugiere/ejecuta acciones inteligentes
 basadas en el tipo de contenido detectado (URL, código, email, JSON, texto...).

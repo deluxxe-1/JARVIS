@@ -1,8 +1,8 @@
 """
-JARVIS Voice Wake Word Listener — Escucha continua por micrófono.
+AARIS Voice Wake Word Listener — Escucha continua por micrófono.
 
 Escucha constantemente el micrófono en segundo plano. Cuando detecta
-la wake word "JARVIS", captura el comando de voz y ejecuta el callback.
+la wake word "AARIS", captura el comando de voz y ejecuta el callback.
 """
 
 import os
@@ -15,19 +15,19 @@ from pathlib import Path
 # Configuración
 # ---------------------------------------------------------------------------
 
-WAKE_WORD = os.environ.get("JARVIS_WAKE_WORD", "jarvis").lower()
+WAKE_WORD = os.environ.get("AARIS_WAKE_WORD", "aaris").lower()
 _listener_active = threading.Event()
 _listener_thread: Optional[threading.Thread] = None
 _listener_callback = None
 
 # Hotkey (persistencia simple)
-_JARVIS_DIR = Path(os.environ.get("JARVIS_APP_DIR", os.path.join(os.path.expanduser("~"), ".jarvis")))
-_HOTKEY_PATH = _JARVIS_DIR / "hotkey.json"
-_hotkey_combo = os.environ.get("JARVIS_HOTKEY", "win+j").strip().lower() or "win+j"
+_AARIS_DIR = Path(os.environ.get("AARIS_APP_DIR", os.path.join(os.path.expanduser("~"), ".aaris")))
+_HOTKEY_PATH = _AARIS_DIR / "hotkey.json"
+_hotkey_combo = os.environ.get("AARIS_HOTKEY", "win+j").strip().lower() or "win+j"
 
 
 def _ensure_dir() -> None:
-    _JARVIS_DIR.mkdir(parents=True, exist_ok=True)
+    _AARIS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _load_hotkey() -> str:
@@ -52,7 +52,7 @@ def set_voice_callback(callback) -> None:
 def start_voice_listener() -> str:
     """
     Inicia el listener de voz continuo en segundo plano.
-    Cuando detecta la wake word (por defecto "JARVIS"), ejecuta el callback
+    Cuando detecta la wake word (por defecto "AARIS"), ejecuta el callback
     configurado con set_voice_callback(), o muestra una notificación por defecto.
     """
     global _listener_thread
@@ -65,7 +65,7 @@ def start_voice_listener() -> str:
         try:
             from automation import show_notification
             show_notification(
-                title="🎤 JARVIS Activado",
+                title="🎤 AARIS Activado",
                 message=f"Comando detectado: {command}",
                 timeout=5,
             )
@@ -109,7 +109,7 @@ def start_voice_listener() -> str:
             _listener_active.clear()
 
     _listener_thread = threading.Thread(
-        target=_listener, daemon=True, name="jarvis-voice-listener"
+        target=_listener, daemon=True, name="aaris-voice-listener"
     )
     _listener_thread.start()
 
@@ -161,7 +161,7 @@ def get_hotkey_status() -> str:
 
 def change_hotkey(combo: str) -> str:
     """
-    Cambia el combo de hotkey persistiendo en `JARVIS_APP_DIR/hotkey.json`.
+    Cambia el combo de hotkey persistiendo en `AARIS_APP_DIR/hotkey.json`.
     """
     global _hotkey_combo
     try:

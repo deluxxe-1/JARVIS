@@ -16,7 +16,7 @@ import hashlib
 import time
 from contextlib import contextmanager
 
-from jarvis.tools.core import *
+from aaris.tools.core import *
 
 def build_text_index(
     root: str = ".",
@@ -30,7 +30,7 @@ def build_text_index(
     """
     try:
         if _read_only_mode():
-            return "Error: JARVIS_READ_ONLY=true. build_text_index deshabilitado."
+            return "Error: AARIS_READ_ONLY=true. build_text_index deshabilitado."
 
         resolved_root = resolve_path(root, must_exist=True)
         if resolved_root.startswith("Error:"):
@@ -38,7 +38,7 @@ def build_text_index(
         base = Path(resolved_root).resolve()
 
         if index_path is None:
-            index_path = os.path.join(os.getcwd(), ".jarvis", "rag_text_index.json")
+            index_path = os.path.join(os.getcwd(), ".aaris", "rag_text_index.json")
         index_path = os.path.abspath(os.path.expanduser(index_path))
         Path(os.path.dirname(index_path)).mkdir(parents=True, exist_ok=True)
 
@@ -105,7 +105,7 @@ def rag_query(
         if not query or not query.strip():
             return "Error: query vacía."
         if index_path is None:
-            index_path = os.path.join(os.getcwd(), ".jarvis", "rag_text_index.json")
+            index_path = os.path.join(os.getcwd(), ".aaris", "rag_text_index.json")
         index_path = os.path.abspath(os.path.expanduser(index_path))
         if not os.path.isfile(index_path):
             return "Error: no existe el índice. Ejecuta build_text_index primero."

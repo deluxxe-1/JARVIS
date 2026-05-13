@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import time
@@ -11,38 +12,47 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from jarvis.engine import MODEL, console, prune_messages, run_simple_chat, run_tool_loop
-from jarvis.tools.core import rollback, rollback_tokens
-from jarvis.tools.filesystem import resolve_path
-from brain import JarvisBrain
-from jarvis.tools_registry import get_all_tools
-from jarvis.tool_selector import _build_tool_groups, _select_tools
+from aaris.engine import (
+    MODEL,
+    SYSTEM_PROMPT,
+    console,
+    prune_messages,
+    run_simple_chat,
+    run_tool_loop,
+    _is_simple_conversational,
+)
+from aaris.tools.core import rollback, rollback_tokens
+from aaris.tools.filesystem import resolve_path
+from brain import AarisBrain
+from aaris.tools_registry import get_all_tools
+from aaris.tool_selector import _build_tool_groups, _select_tools
 
+_log = logging.getLogger("aaris.cli")
 
-MAX_TOOL_ROUNDS = int(os.environ.get("JARVIS_MAX_TOOL_ROUNDS", "12"))
-MAX_CONTEXT_MESSAGES = int(os.environ.get("JARVIS_MAX_CONTEXT_MESSAGES", "20"))
-MEMORY_UPDATE_EVERY = int(os.environ.get("JARVIS_MEMORY_UPDATE_EVERY", "5"))
-PLAN_MODE = os.environ.get("JARVIS_PLAN_MODE", "off")  # off | auto | confirm
-DRY_RUN = os.environ.get("JARVIS_DRY_RUN", "false").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
-PREVIEW_MUTATIONS = os.environ.get("JARVIS_PREVIEW_MUTATIONS", "true").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
-PREVIEW_CONFIRM_ALWAYS = os.environ.get("JARVIS_PREVIEW_CONFIRM_ALWAYS", "false").strip().lower() in (
+MAX_TOOL_ROUNDS = int(os.environ.get("AARIS_MAX_TOOL_ROUNDS", "12"))
+MAX_CONTEXT_MESSAGES = int(os.environ.get("AARIS_MAX_CONTEXT_MESSAGES", "20"))
+MEMORY_UPDATE_EVERY = int(os.environ.get("AARIS_MEMORY_UPDATE_EVERY", "5"))
+PLAN_MODE = os.environ.get("AARIS_PLAN_MODE", "off")  # off | auto | confirm
+DRY_RUN = os.environ.get("AARIS_DRY_RUN", "false").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
+PREVIEW_MUTATIONS = os.environ.get("AARIS_PREVIEW_MUTATIONS", "true").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
+PREVIEW_CONFIRM_ALWAYS = os.environ.get("AARIS_PREVIEW_CONFIRM_ALWAYS", "false").strip().lower() in (
     "1", "true", "yes", "si", "sí", "on",
 )
-DIFF_MAX_LINES = int(os.environ.get("JARVIS_DIFF_MAX_LINES", "300"))
-BACKUP_MAX_AGE_DAYS = int(os.environ.get("JARVIS_BACKUP_MAX_AGE_DAYS", "7"))
+DIFF_MAX_LINES = int(os.environ.get("AARIS_DIFF_MAX_LINES", "300"))
+BACKUP_MAX_AGE_DAYS = int(os.environ.get("AARIS_BACKUP_MAX_AGE_DAYS", "7"))
 
 DEFAULT_MEMORY_PATH = os.environ.get(
-    "JARVIS_MEMORY_PATH",
-    os.path.join(os.path.expanduser("~"), ".jarvis", "memory.json"),
+    "AARIS_MEMORY_PATH",
+    os.path.join(os.path.expanduser("~"), ".aaris", "memory.json"),
 )
 
 DEFAULT_LOG_PATH = os.environ.get(
-    "JARVIS_LOG_PATH",
-    os.path.join(os.path.expanduser("~"), ".jarvis", "agent_log.jsonl"),
+    "AARIS_LOG_PATH",
+    os.path.join(os.path.expanduser("~"), ".aaris", "agent_log.jsonl"),
 )
 
-DEFAULT_APP_DIR = os.environ.get("JARVIS_APP_DIR", os.path.join(os.getcwd(), ".jarvis"))
-UNDO_REDO_PATH = os.environ.get("JARVIS_UNDO_REDO_PATH", os.path.join(DEFAULT_APP_DIR, "undo_redo.json"))
+DEFAULT_APP_DIR = os.environ.get("AARIS_APP_DIR", os.path.join(os.getcwd(), ".aaris"))
+UNDO_REDO_PATH = os.environ.get("AARIS_UNDO_REDO_PATH", os.path.join(DEFAULT_APP_DIR, "undo_redo.json"))
 
 
 
@@ -55,7 +65,7 @@ UNDO_REDO_PATH = os.environ.get("JARVIS_UNDO_REDO_PATH", os.path.join(DEFAULT_AP
 def _cleanup_old_backups(max_age_days: int = 7) -> None:
     """Elimina backups con más de max_age_days días para no llenar el disco."""
     try:
-        from jarvis.tools.core import _backup_base_dir
+        from aaris.tools.core import _backup_base_dir
         base = _backup_base_dir()
         cutoff = time.time() - max_age_days * 86400
         files_cleaned = 0
@@ -75,7 +85,7 @@ def _cleanup_old_backups(max_age_days: int = 7) -> None:
         if files_cleaned:
             console.print(f"[dim]🧹 Backups antiguos eliminados: {files_cleaned}[/dim]")
     except Exception:
-        pass
+        _log.debug("cleanup_old_backups", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +119,7 @@ def _load_undo_redo_state() -> dict[str, Any]:
         data.setdefault("redo", [])
         return data
     except Exception:
+        _log.debug("load_undo_redo_state", exc_info=True)
         return {"undo": [], "redo": []}
 
 
@@ -120,10 +131,7 @@ def _save_undo_redo_state(state: dict[str, Any]) -> None:
         tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(p)
     except Exception:
-        pass
-
-
-from jarvis.prompts import SYSTEM_PROMPT
+        _log.debug("save_undo_redo_state", exc_info=True)
 
 
 def main():
@@ -131,7 +139,7 @@ def main():
     log_path = os.path.abspath(DEFAULT_LOG_PATH)
 
     # --- Brain (Obsidian vault) ---
-    brain = JarvisBrain()
+    brain = AarisBrain()
     brain.initialize()
 
     # Mensajes base: solo system prompt
@@ -148,24 +156,25 @@ def main():
 
     console.print(
         Panel.fit(
-            f"[bold blue]J.A.R.V.I.S.[/bold blue] — asistente local (modelo [cyan]{MODEL}[/cyan])\n"
+            f"[bold blue]A.A.R.I.S.[/bold blue] — asistente local (modelo [cyan]{MODEL}[/cyan])\n"
             "Escribe salir / exit / quit para terminar.\n"
             "Comandos: `ver memoria`, `reset memoria`, `workspace show`, `set workspace <ruta>`.\n"
-            f"[dim]Opciones: OLLAMA_MODEL, OLLAMA_NUM_CTX, OLLAMA_TEMPERATURE, JARVIS_MAX_TOOL_ROUNDS, "
-            f"JARVIS_MAX_CONTEXT_MESSAGES, JARVIS_BACKUP_MAX_AGE_DAYS[/dim]",
+            f"[dim]Opciones: AARIS_MODEL, OLLAMA_MODEL, OLLAMA_NUM_CTX, OLLAMA_TEMPERATURE, AARIS_MAX_TOOL_ROUNDS, "
+            f"AARIS_MAX_CONTEXT_MESSAGES, AARIS_BACKUP_MAX_AGE_DAYS, AARIS_PLAN_MODE (off|auto|confirm).[/dim]",
             border_style="blue",
         )
     )
 
     import sys
     if "--server" in sys.argv:
-        from jarvis.http_server import start_server
+        from aaris.http_server import start_server
 
-        api_token = os.environ.get("JARVIS_API_TOKEN", "").strip() or None
-        max_body = os.environ.get("JARVIS_HTTP_MAX_BODY_BYTES", "").strip()
+        api_token = os.environ.get("AARIS_API_TOKEN", "").strip() or None
+        max_body = os.environ.get("AARIS_HTTP_MAX_BODY_BYTES", "").strip()
         try:
             max_body_bytes = int(max_body) if max_body else 1024 * 1024
-        except Exception:
+        except Exception as e:
+            _log.debug("http max_body parse", exc_info=True)
             max_body_bytes = 1024 * 1024
 
         def _reply(prompt: str) -> str:
@@ -177,7 +186,10 @@ def main():
             return run_tool_loop(msgs, active, tool_map, opts)
 
         console.print("[bold green]Servidor HTTP activo (POST /api/chat, GET /health).[/bold green]")
-        start_server(_reply, api_token=api_token, max_body_bytes=max_body_bytes)
+        try:
+            start_server(_reply, api_token=api_token, max_body_bytes=max_body_bytes)
+        except RuntimeError as e:
+            console.print(f"[bold red]{e}[/bold red]")
         return
 
 
@@ -187,7 +199,7 @@ def main():
             prompt = sys.argv[idx + 1]
             msgs = [{"role": "system", "content": SYSTEM_PROMPT}] + [{"role": "user", "content": prompt}]
             active = _select_tools(prompt, available_tools, tool_groups)
-            reply = _run_tool_loop(msgs, active, tool_map, opts)
+            reply = run_tool_loop(msgs, active, tool_map, opts)
             console.print(Markdown(reply))
         return
 
@@ -294,10 +306,10 @@ def main():
 
             if low in ("capabilities", "cap", "capacidades"):
                 console.print("[bold purple]Capabilities:[/bold purple]")
-                console.print(f"- JARVIS_DRY_RUN={DRY_RUN}")
-                console.print(f"- JARVIS_PLAN_MODE={PLAN_MODE}")
-                console.print(f"- JARVIS_READ_ONLY={os.environ.get('JARVIS_READ_ONLY', 'false')}")
-                console.print(f"- JARVIS_USE_TRASH={os.environ.get('JARVIS_USE_TRASH', 'true')}")
+                console.print(f"- AARIS_DRY_RUN={DRY_RUN}")
+                console.print(f"- AARIS_PLAN_MODE={PLAN_MODE}")
+                console.print(f"- AARIS_READ_ONLY={os.environ.get('AARIS_READ_ONLY', 'false')}")
+                console.print(f"- AARIS_USE_TRASH={os.environ.get('AARIS_USE_TRASH', 'true')}")
                 console.print(f"- Tools disponibles={len(available_tools)}")
                 continue
 
@@ -440,7 +452,7 @@ def main():
 
             turn_start_idx = len(messages)
 
-            # Inyectar contexto del vault de JARVIS (brain)
+            # Inyectar contexto del vault de AARIS (brain)
             vault_context = brain.before_turn(user_input)
             if vault_context:
                 messages.append({"role": "system", "content": vault_context})

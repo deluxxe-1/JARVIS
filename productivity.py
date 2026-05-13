@@ -1,5 +1,5 @@
 """
-JARVIS Productivity Module — Recordatorios, Macros y Gestor de Contraseñas.
+AARIS Productivity Module — Recordatorios, Macros y Gestor de Contraseñas.
 
 Subsistemas:
 1. Reminders: recordatorios con daemon thread, notificaciones toast
@@ -25,15 +25,15 @@ from typing import Optional, Any
 # Configuración
 # ---------------------------------------------------------------------------
 
-_JARVIS_DIR = Path(os.environ.get(
-    "JARVIS_APP_DIR",
-    os.path.join(os.path.expanduser("~"), ".jarvis"),
+_AARIS_DIR = Path(os.environ.get(
+    "AARIS_APP_DIR",
+    os.path.join(os.path.expanduser("~"), ".aaris"),
 ))
 
-REMINDERS_PATH = _JARVIS_DIR / "reminders.json"
-MACROS_PATH = _JARVIS_DIR / "macros.json"
-VAULT_PATH = _JARVIS_DIR / "vault.enc"
-VAULT_META_PATH = _JARVIS_DIR / "vault.meta.json"
+REMINDERS_PATH = _AARIS_DIR / "reminders.json"
+MACROS_PATH = _AARIS_DIR / "macros.json"
+VAULT_PATH = _AARIS_DIR / "vault.enc"
+VAULT_META_PATH = _AARIS_DIR / "vault.meta.json"
 REMINDER_CHECK_INTERVAL = 30  # segundos
 
 
@@ -42,8 +42,8 @@ REMINDER_CHECK_INTERVAL = 30  # segundos
 # ---------------------------------------------------------------------------
 
 def _ensure_dir():
-    """Asegura que el directorio .jarvis existe."""
-    _JARVIS_DIR.mkdir(parents=True, exist_ok=True)
+    """Asegura que el directorio .aaris existe."""
+    _AARIS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _load_json(path: Path) -> Any:
@@ -242,7 +242,7 @@ def _check_and_trigger_reminders():
                 try:
                     from automation import show_notification
                     show_notification(
-                        title="🔔 JARVIS Recordatorio",
+                        title="🔔 AARIS Recordatorio",
                         message=r["message"],
                         timeout=15,
                     )
@@ -274,7 +274,7 @@ def _ensure_reminder_daemon():
     if _reminder_thread is not None and _reminder_thread.is_alive():
         return
     _reminder_stop.clear()
-    _reminder_thread = threading.Thread(target=_reminder_daemon, daemon=True, name="jarvis-reminders")
+    _reminder_thread = threading.Thread(target=_reminder_daemon, daemon=True, name="aaris-reminders")
     _reminder_thread.start()
 
 
@@ -533,7 +533,7 @@ def delete_macro(name: str, confirm: bool = False) -> str:
 
 def _derive_key(master: str) -> bytes:
     """Deriva una clave Fernet a partir de una master password (legacy)."""
-    salt = b"JARVIS_VAULT_SALT_2026"
+    salt = b"AARIS_VAULT_SALT_2026"
     dk = hashlib.pbkdf2_hmac("sha256", master.encode("utf-8"), salt, iterations=100_000)
     return base64.urlsafe_b64encode(dk)
 
@@ -575,7 +575,7 @@ def _save_vault_meta(meta: dict[str, Any]) -> Optional[str]:
 
 def _get_master_key() -> Optional[str]:
     """Obtiene la master key del vault."""
-    key = os.environ.get("JARVIS_VAULT_KEY", "").strip()
+    key = os.environ.get("AARIS_VAULT_KEY", "").strip()
     if key:
         return key
     return None
@@ -590,7 +590,7 @@ def _get_fernet():
 
     master = _get_master_key()
     if not master:
-        return None, "Error: JARVIS_VAULT_KEY no configurado. Set JARVIS_VAULT_KEY=tu_clave_maestra"
+        return None, "Error: AARIS_VAULT_KEY no configurado. Set AARIS_VAULT_KEY=tu_clave_maestra"
 
     meta, meta_err = _load_vault_meta()
     if meta_err:
@@ -669,7 +669,7 @@ def rotate_vault_key(new_master_key: str, confirm: bool = False) -> str:
     """
     Re-encripta el vault con una nueva master key (sin perder entradas).
 
-    Requiere que `JARVIS_VAULT_KEY` actual sea válida para desencriptar.
+    Requiere que `AARIS_VAULT_KEY` actual sea válida para desencriptar.
     """
     try:
         if not confirm:
@@ -687,15 +687,15 @@ def rotate_vault_key(new_master_key: str, confirm: bool = False) -> str:
             return meta_err
 
         # Construimos Fernet con la nueva key y meta (v2 si existe, o la creará al guardar).
-        old_env = os.environ.get("JARVIS_VAULT_KEY", "")
-        os.environ["JARVIS_VAULT_KEY"] = new_master_key.strip()
+        old_env = os.environ.get("AARIS_VAULT_KEY", "")
+        os.environ["AARIS_VAULT_KEY"] = new_master_key.strip()
         try:
             save_err = _save_vault(vault)
             if save_err:
                 return save_err
         finally:
             # Restaurar env para no sorprender a quien llama.
-            os.environ["JARVIS_VAULT_KEY"] = old_env
+            os.environ["AARIS_VAULT_KEY"] = old_env
 
         return json.dumps({"status": "ok", "rotated": True}, ensure_ascii=False)
     except Exception as e:

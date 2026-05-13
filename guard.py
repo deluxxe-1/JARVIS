@@ -1,5 +1,5 @@
 """
-JARVIS System Guard Module — Vigía del sistema en background.
+AARIS System Guard Module — Vigía del sistema en background.
 
 Monitoriza CPU, RAM, disco y batería. Dispara alertas/acciones automáticas
 cuando se superan umbrales configurables.
@@ -18,13 +18,13 @@ from typing import Optional, Any
 # Configuración
 # ---------------------------------------------------------------------------
 
-_JARVIS_DIR = Path(os.environ.get(
-    "JARVIS_APP_DIR",
-    os.path.join(os.path.expanduser("~"), ".jarvis"),
+_AARIS_DIR = Path(os.environ.get(
+    "AARIS_APP_DIR",
+    os.path.join(os.path.expanduser("~"), ".aaris"),
 ))
 
-GUARD_CONFIG_PATH = _JARVIS_DIR / "guard_config.json"
-GUARD_LOG_PATH = _JARVIS_DIR / "guard_log.jsonl"
+GUARD_CONFIG_PATH = _AARIS_DIR / "guard_config.json"
+GUARD_LOG_PATH = _AARIS_DIR / "guard_log.jsonl"
 
 # Umbrales por defecto
 _DEFAULT_THRESHOLDS = {
@@ -55,7 +55,7 @@ def _load_config() -> dict[str, Any]:
 
 def _save_config(config: dict[str, Any]) -> None:
     """Guarda la configuración del guard."""
-    _JARVIS_DIR.mkdir(parents=True, exist_ok=True)
+    _AARIS_DIR.mkdir(parents=True, exist_ok=True)
     GUARD_CONFIG_PATH.write_text(
         json.dumps(config, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -65,7 +65,7 @@ def _save_config(config: dict[str, Any]) -> None:
 def _log_alert(alert_type: str, message: str, data: dict) -> None:
     """Registra una alerta en el log."""
     try:
-        _JARVIS_DIR.mkdir(parents=True, exist_ok=True)
+        _AARIS_DIR.mkdir(parents=True, exist_ok=True)
         entry = {
             "ts": datetime.now().isoformat(timespec="seconds"),
             "type": alert_type,
@@ -191,7 +191,7 @@ def _guard_daemon():
             try:
                 from automation import show_notification
                 show_notification(
-                    title="🛡️ JARVIS Guard",
+                    title="🛡️ AARIS Guard",
                     message=alert["message"],
                     timeout=10,
                 )
@@ -218,7 +218,7 @@ def start_guard() -> str:
 
     _guard_stop.clear()
     _guard_thread = threading.Thread(
-        target=_guard_daemon, daemon=True, name="jarvis-guard",
+        target=_guard_daemon, daemon=True, name="aaris-guard",
     )
     _guard_thread.start()
 

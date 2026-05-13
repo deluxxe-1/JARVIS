@@ -1,5 +1,5 @@
 """
-JARVIS Window Manager Module — Control de ventanas del escritorio.
+AARIS Window Manager Module — Control de ventanas del escritorio.
 
 Permite listar, mover, redimensionar y organizar ventanas abiertas.
 Soporte multi-monitor: detecta monitores, mueve ventanas entre ellos.
