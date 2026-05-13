@@ -279,11 +279,13 @@ def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str,
         _add_group("scraper")
 
     if any(k in s for k in [
-        "clima", "tiempo", "weather", "noticias", "news", "busca en", "web search",
+        "clima", "tiempo", "weather", "noticias", "noticia", "news", "busca en", "web search",
         "wikipedia", "wiki", "traduce", "translate", "mi ip", "ip", "bitcoin", "crypto",
         "hora en", "fecha", "google", "duckduckgo", "reddit", "stackoverflow",
         "stack overflow", "documentación", "documentacion", "en línea", "en linea",
         "página web", "pagina web", "url http", "https://", "http://",
+        "qué es", "que es", "quién es", "quien es", "dime sobre", "dime la",
+        "cuéntame", "cuentame", "última", "ultima", "en el mundo",
     ]):
         _add_group("apis")
     if any(k in s for k in ["abre", "cierra", "abrir", "cerrar", "chrome", "firefox", "notepad", "spotify", "discord", "volumen", "volume", "silencia", "mute", "captura", "screenshot", "wallpaper", "portapapeles", "clipboard", "notificación", "url", "bloquear", "sistema", "batería", "brillo", "papelera"]):
@@ -343,7 +345,10 @@ def _select_tools(user_input: str, available_tools: list, tool_groups: dict[str,
     ])
     intent_web_research = any(k in s for k in [
         "investiga", "averigua", "busca en internet", "información sobre", "informacion sobre",
-        "actualidad", "últimas noticias", "ultimas noticias", "hoy en día", "hoy en dia",
+        "actualidad", "últimas noticias", "ultimas noticias", "ultima noticia", "última noticia",
+        "hoy en día", "hoy en dia", "en el mundo",
+        "qué es", "que es", "quién es", "quien es", "dime sobre", "dime la",
+        "cuéntame", "cuentame",
     ]) or _informacion_sobre_typo(s) or _compound_disk_and_web_research(s)
 
     if intent_ocr:

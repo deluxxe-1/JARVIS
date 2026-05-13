@@ -272,28 +272,69 @@ def _run_tool_loop(
         messages.append(response_message)
 
         tool_calls = response_message.get("tool_calls") or []
-        
-        # --- Fallback: Detectar llamadas escritas como texto plano ---
         content = response_message.get("content") or ""
-        if not tool_calls and ("_icall_" in content or "web_search" in content):
-            # Buscar patrones como _icall_web_search_full("query") o web_search(query="...")
-            match = re.search(r'(?:_icall_)?(\w+)\s*\((.*)\)', content)
-            if match:
-                fn_name = match.group(1)
-                raw_args = match.group(2)
-                
-                # Intentar limpiar argumentos (muy básico)
-                clean_args = {}
-                if "query=" in raw_args:
-                    m_arg = re.search(r'query=["\'](.*?)["\']', raw_args)
-                    if m_arg: clean_args["query"] = m_arg.group(1)
-                elif '"' in raw_args or "'" in raw_args:
-                    m_arg = re.search(r'["\'](.*?)["\']', raw_args)
-                    if m_arg: clean_args["query" if "search" in fn_name else "text"] = m_arg.group(1)
-                
-                if fn_name in tool_map:
-                    tool_calls = [{"function": {"name": fn_name, "arguments": clean_args}}]
-                    console.print(f"[dim yellow]⚠ Fallback detectado: {fn_name}[/dim yellow]")
+        
+        # --- Detectar si el contenido es basura (scripts, _icall, código) ---
+        _is_garbage = False
+        if content.strip():
+            lc_content = content.lower()
+            garbage_indicators = [
+                "_icall", "eval \"$response\"", "#!/bin", "local response",
+                "echo '{", "jq -r", "${AARIS_", "${JARVIS_",
+                "function()", "if [", "fi\n", "esac",
+            ]
+            if any(g in lc_content for g in garbage_indicators):
+                _is_garbage = True
+            # Código con muchas llaves/corchetes = probablemente script, no respuesta
+            if content.count("{") > 3 and content.count("}") > 3 and len(content) > 200:
+                if "name" in lc_content and "arguments" in lc_content:
+                    _is_garbage = True
+        
+        # Solo guardar contenido si NO es basura
+        if content.strip() and not _is_garbage:
+            reply_content = content
+        
+        # --- Fallback: Detectar herramientas que el modelo intenta llamar como texto ---
+        if not tool_calls and content.strip():
+            # Buscar CUALQUIER nombre de herramienta conocida en el texto
+            _detected_tool = None
+            _detected_args = {}
+            
+            # Mapa de patrones → herramienta real + argumentos por defecto
+            _tool_patterns = {
+                "get_news": "get_news",
+                "web_search_full": "web_search_full",
+                "web_search": "web_search",
+                "semantic_search": "web_search_full",  # redirigir
+                "get_latest_world_news": "get_news",   # no existe, redirigir
+                "wikipedia_search": "wikipedia_search",
+                "get_weather": "get_weather",
+                "get_crypto_price": "get_crypto_price",
+                "create_file": "create_file",
+            }
+            
+            for pattern, real_tool in _tool_patterns.items():
+                if pattern in content and real_tool in tool_map:
+                    _detected_tool = real_tool
+                    # Intentar extraer query/argumentos del texto
+                    arg_match = re.search(r'["\'](.*?)["\']', content)
+                    if arg_match:
+                        _detected_args = {"query": arg_match.group(1)}
+                    break
+            
+            # Si detectamos una herramienta, buscar la query original del usuario
+            if _detected_tool and not _detected_args.get("query"):
+                for m in reversed(messages):
+                    if m.get("role") == "user":
+                        user_q = m.get("content", "").strip()
+                        if user_q and not user_q.startswith("INSTRUCCIÓN") and not user_q.startswith("PARA.") and not user_q.startswith("Has ejecutado"):
+                            _detected_args = {"query": user_q}
+                            break
+            
+            if _detected_tool:
+                tool_calls = [{"function": {"name": _detected_tool, "arguments": _detected_args}}]
+                reply_content = ""  # Limpiar la basura
+                console.print(f"[dim yellow]⚠ Fallback: modelo escribió texto, ejecutando {_detected_tool}({_detected_args})[/dim yellow]")
 
         if not tool_calls:
             reply_content = response_message.get("content") or ""
@@ -645,47 +686,67 @@ def _run_tool_loop(
                     ),
                 })
 
-    # Si terminamos el loop y no hay contenido, pero se usaron herramientas, 
-    # o si alcanzamos el límite de rondas, forzamos una síntesis final.
-    tools_were_used = rounds > 1 or (rounds == 1 and tool_calls)
+        if rounds >= MAX_TOOL_ROUNDS:
+            hit_round_limit = True
+            break
+
+    # ── Síntesis final si no hay respuesta tras ejecutar herramientas ──
+    # Recopilar nombres de tools ejecutadas y sus resultados para contexto
+    executed_tools: list[str] = []
+    last_tool_result = ""
+    for m in messages:
+        if m.get("role") == "tool":
+            executed_tools.append(m.get("name", "tool"))
+            last_tool_result = m.get("content", "")
     
-    if (hit_round_limit or (tools_were_used and not reply_content.strip())):
-        # Si no hay respuesta, intentamos una última vez con un prompt muy agresivo
+    tools_were_used = len(executed_tools) > 0
+    
+    if tools_were_used and not reply_content.strip():
+        # Intentar que el modelo genere un resumen
+        tool_names_str = ", ".join(executed_tools[-5:])
         messages.append({
             "role": "user",
-            "content": "IMPORTANTE: Tienes los resultados de la búsqueda arriba. Explícame qué has encontrado en español de forma detallada. NO respondas con texto vacío.",
+            "content": (
+                f"Has ejecutado las herramientas: {tool_names_str}. "
+                "Ahora responde al usuario en español explicando qué hiciste y el resultado. "
+                "NO respondas con texto vacío. Sé conciso y directo."
+            ),
         })
         with console.status("[bold cyan]Generando resumen final...[/bold cyan]", spinner="dots"):
-            final = chat(model=MODEL, messages=messages, options=options or None)
+            try:
+                final = chat(model=MODEL, messages=messages, options=options or None)
+                reply_content = final["message"].get("content") or ""
+            except Exception as e:
+                console.print(f"[red]Error en síntesis final: {e}[/red]")
         
-        reply_content = final["message"].get("content") or ""
-        
-        # SI SIGUE VACÍO: Fallback de emergencia — mostrar los datos crudos
-        if not reply_content.strip() and tools_were_used:
-            console.print("[red]⚠ El modelo no generó resumen. Usando fallback de datos crudos.[/red]")
-            # Buscar el último resultado de herramienta exitoso
-            last_tool_res = ""
-            for m in reversed(messages):
-                if m.get("role") == "tool" and m.get("content"):
-                    last_tool_res = m.get("content")
-                    break
-            
-            if last_tool_res:
-                try:
-                    # Si es JSON, intentar embellecerlo un poco
-                    data = json.loads(last_tool_res)
-                    if isinstance(data, dict) and "results" in data:
-                        res_list = []
-                        for r in data["results"][:3]:
-                            res_list.append(f"- {r.get('title')}: {r.get('snippet')}")
-                        reply_content = "El modelo no pudo resumir la información, pero aquí están los resultados directos:\n\n" + "\n".join(res_list)
+        # SI SIGUE VACÍO: Fallback de emergencia — mostrar resultado crudo de la última tool
+        if not reply_content.strip() and last_tool_result:
+            console.print("[red]⚠ El modelo no generó resumen. Mostrando resultado directo.[/red]")
+            try:
+                data = json.loads(last_tool_result)
+                if isinstance(data, dict):
+                    if "results" in data:
+                        # Resultados de búsqueda
+                        lines = []
+                        for r in data["results"][:5]:
+                            lines.append(f"• **{r.get('title', '')}**: {r.get('snippet', '')}")
+                        reply_content = f"Resultados encontrados:\n\n" + "\n".join(lines)
                     else:
-                        reply_content = f"Resultados encontrados:\n\n{last_tool_res[:1000]}"
-                except:
-                    reply_content = f"Resultados encontrados:\n\n{last_tool_res[:1000]}"
+                        # Otro tipo de resultado (create_file, etc.)
+                        reply_content = f"Herramienta ejecutada correctamente:\n\n{json.dumps(data, indent=2, ensure_ascii=False)[:1500]}"
+                else:
+                    reply_content = f"Resultado:\n\n{last_tool_result[:1500]}"
+            except (json.JSONDecodeError, ValueError):
+                # No es JSON, mostrar como texto
+                reply_content = f"Resultado de la herramienta:\n\n{last_tool_result[:1500]}"
 
     if not reply_content.strip():
-        reply_content = "No he podido obtener una respuesta clara del modelo de IA, aunque las herramientas se ejecutaron. Por favor, revisa la consola para más detalles."
+        if hit_round_limit:
+            reply_content = "Se alcanzó el límite de rondas de herramientas sin una respuesta clara. Intenta de nuevo."
+        elif tools_were_used:
+            reply_content = f"Las herramientas ({', '.join(executed_tools[-3:])}) se ejecutaron pero no se pudo generar un resumen. Último resultado:\n\n{last_tool_result[:800]}"
+        else:
+            reply_content = "No se ejecutaron herramientas ni se generó respuesta. Intenta ser más específico."
 
     return reply_content
 
